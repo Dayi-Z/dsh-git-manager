@@ -1,0 +1,84 @@
+{
+  "name": "gitcompass",
+  "version": "0.1.0",
+  "description": "A GitHub-connected visual git panel for DeepSeek Harness — guided flow (branch → commit → push → PR → review → merge), commit graph with PR/CI badges, one-click GitHub login, and structured git tools for the agent.",
+  "license": "MIT",
+  "author": "gitcompass contributors",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "src",
+    "client",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19 || >=24",
+    "dsh": ">=0.1.0-rc.6"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "tsdown && npm run build:client",
+    "build:client": "tsdown --config tsdown.client.config.ts && node scripts/normalize-client-banner.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "check": "pnpm run typecheck && pnpm run build",
+    "prepare": "pnpm run build",
+    "dev": "tsdown --watch"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "git",
+    "github",
+    "pull-request",
+    "ui"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-workspace": "^0.1.0-rc.6"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
+    "@types/node": "^22.13.0",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3.0",
+    "react": "^18.3.1",
+    "react-dom": "~18.3.1",
+    "tsdown": "^0.22.14",
+    "typescript": "^5.7.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./client/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  }
+}

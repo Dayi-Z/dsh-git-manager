@@ -1,0 +1,5 @@
+# gitcompass — DSH web git + GitHub workbench bundle patch.
+# Installed via `dsh plugin --profile web add github:Dayi-Z/gitcompass` (or link:).
+- insert:
+    - id: gitcompass
+      name: 'gitcompass'
