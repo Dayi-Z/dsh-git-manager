@@ -21,9 +21,9 @@ import {
   type IssueSummary,
   type IssueDetail,
 } from './api.ts'
-import { t } from './i18n.ts'
+import { t, setLocaleOverride, getLocaleOverride } from './i18n.ts'
 import { layoutGraph } from './graph.ts'
-import { useGitEvents, type GitEvent } from './events.ts'
+import { useGitEvents, pendingApprovalCount, type GitEvent } from './events.ts'
 import { onOpFeedback, report, reportError, type OpFeedback } from './feedback.ts'
 import { Icon, type IconName } from './icons.tsx'
 
@@ -244,11 +244,47 @@ body[data-ds-dark-theme] .gitcompass-panel{
 .gc-bsrow .n > span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gc-bsrow .m{display:flex;gap:10px;font-size:10px;opacity:.62;padding-left:17px;min-width:0}
 .gc-bssec{padding:6px 9px 2px;font-weight:600;opacity:.55;font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+/* P0/P1：冲突横幅条 / 页签徽标 / 设置菜单 / 贮藏列表 */
+.gc-conflict{border:1px solid var(--gc-amber);background:rgba(210,153,34,.10);border-radius:8px;padding:6px 8px;margin-bottom:8px}
+.gc-conflict-head{display:flex;align-items:center;gap:6px;color:var(--gc-amber)}
+.gc-conflict-head .t{font-weight:600;font-size:12px}
+.gc-conflict .gc-row{color:var(--gc-fg)}
+.gc-conflict-head .gc-btn{padding:1px 8px;font-size:11px}
+.gc-badge{display:inline-flex;align-items:center;justify-content:center;min-width:15px;height:15px;padding:0 4px;margin-left:4px;border-radius:8px;background:var(--gc-amber);color:#fff;font-size:9px;font-weight:700;line-height:1}
+.gc-settings{position:absolute;top:34px;right:10px;z-index:60;display:flex;flex-direction:column;gap:6px;background:var(--gc-bg);border:1px solid var(--gc-border);border-radius:8px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);min-width:220px}
+.gc-settings-row{display:flex;align-items:center;gap:4px}
+.gc-settings-row .gc-muted{min-width:52px}
+.gc-stashlist{border:1px solid var(--gc-border);border-radius:6px;padding:4px 6px;margin-bottom:6px;background:var(--gc-bg-soft)}
 `
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 设置：轮询速度（localStorage 持久化；usePoll 读取缩放系数）
+// ---------------------------------------------------------------------------
+
+type PollSpeed = 'fast' | 'std' | 'slow'
+const POLL_SCALE: Record<PollSpeed, number> = { fast: 0.5, std: 1, slow: 2 }
+let pollSpeed: PollSpeed = (() => {
+  try {
+    const v = localStorage.getItem('gc.poll')
+    if (v === 'fast' || v === 'std' || v === 'slow') return v
+  } catch { /* no storage */ }
+  return 'std'
+})()
+function getPollScale(): number { return POLL_SCALE[pollSpeed] }
+function setPollSpeed(v: PollSpeed): void {
+  pollSpeed = v
+  try { localStorage.setItem('gc.poll', v) } catch { /* no storage */ }
+}
+function getPullRebase(): boolean {
+  try { return localStorage.getItem('gc.pullRebase') === '1' } catch { return false }
+}
+function setPullRebaseFlag(v: boolean): void {
+  try { localStorage.setItem('gc.pullRebase', v ? '1' : '0') } catch { /* no storage */ }
+}
 
 function usePoll<T>(fn: () => Promise<T>, deps: unknown[], intervalMs: number): { data: T | null; error: string | null; reload: () => void } {
   const [data, setData] = useState<T | null>(null)
@@ -266,7 +302,7 @@ function usePoll<T>(fn: () => Promise<T>, deps: unknown[], intervalMs: number): 
       }
     }
     void run()
-    const timer = setInterval(run, intervalMs)
+    const timer = setInterval(run, Math.max(800, intervalMs * getPollScale()))
     return () => { alive = false; clearInterval(timer) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, tick])
@@ -384,6 +420,10 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
   // 行点击展开操作区（无悬停依赖）
   const [expandedLocal, setExpandedLocal] = useState<string | null>(null)
   const [expandedRemote, setExpandedRemote] = useState<string | null>(null)
+  // 标签：列表 + 创建（可注释）
+  const { data: tags, reload: reloadTags } = usePoll(() => api.tags(path), [path], 15000)
+  const [tagName, setTagName] = useState('')
+  const [tagMsg, setTagMsg] = useState('')
 
   const doBranch = async (kind: string, fn: () => Promise<unknown>): Promise<void> => { setBusy(kind); try { await fn(); reload() } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(null) } }
 
@@ -453,7 +493,7 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
       <div className="gc-bhead">
         <div className="gc-bswitch">
           <button className="gc-bpill" onClick={() => setMenuOpen(!menuOpen)}>
-            <span className="dot" /><span className="nm">{branches ? branches.current : '…'}</span><span className="cv">▼</span>
+            <span className="dot" /><span className="nm">{branches ? branches.current : '…'}</span><span className="cv"><Icon name="chevron-down" size={11} /></span>
           </button>
           {switcherMenu}
         </div>
@@ -520,6 +560,25 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
       ) : (
         <div className="gc-empty">{t('common.loading')}</div>
       )}
+
+      {/* 标签：教学向最小闭环（建/删/推） */}
+      <div className="gc-section" style={{ marginTop: 10 }}><div className="head"><Icon name="tag" size={12} /> {t('tags.title')}（{tags?.length ?? 0}）</div></div>
+      <div className="gc-row">
+        <input className="gc-input" placeholder={t('tags.placeholder')} value={tagName} onChange={(e) => setTagName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && tagName.trim()) void doBranch('tagCreate', () => api.tagCreate(path, tagName.trim(), tagMsg.trim() || undefined).then(() => { setTagName(''); setTagMsg('') })).then(reloadTags) }} />
+        <input className="gc-input" style={{ width: 110, flex: 'none' }} placeholder={t('tags.msgPlaceholder')} value={tagMsg} onChange={(e) => setTagMsg(e.target.value)} />
+        <button className="gc-btn" disabled={!tagName.trim() || busy !== null} onClick={() => void doBranch('tagCreate', () => api.tagCreate(path, tagName.trim(), tagMsg.trim() || undefined).then(() => { setTagName(''); setTagMsg('') })).then(reloadTags)}><Icon name="tag" size={12} />{t('tags.create')}</button>
+      </div>
+      {(tags ?? []).length === 0 ? <div className="gc-muted" style={{ padding: '2px 4px' }}>{t('tags.none')}</div> : null}
+      {(tags ?? []).map((tag) => (
+        <div key={tag.name} className="gc-row" style={{ padding: '1px 2px' }}>
+          <span className="sha" style={{ color: 'var(--gc-amber)' }}><Icon name="tag" size={11} /></span>
+          <span className="sub" title={tag.name}>{tag.name}</span>
+          <span style={{ flex: 1 }} />
+          {tag.date ? <span className="gc-muted" style={{ fontSize: 10 }}>{tag.date}</span> : null}
+          <button className="gc-btn sm" disabled={busy !== null} title={t('changes.push')} onClick={() => doBranch('tagPush', () => api.tagPush(path, tag.name))}><Icon name="arrow-up" size={12} /></button>
+          <button className="gc-btn sm" disabled={busy !== null} title={t('branches.delete')} onClick={() => doBranch('tagDelete', () => api.tagDelete(path, tag.name))}><Icon name="trash" size={12} /></button>
+        </div>
+      ))}
     </div>
   )
 }
@@ -546,6 +605,45 @@ function DiffView({ patch, loading }: { patch: string; loading?: boolean }): JSX
         else if (l.startsWith('-')) cls = 'del'
         return <span key={i} className={`gc-dl ${cls}`}>{l === '' ? '\u00a0' : l}</span>
       })}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 冲突横幅条：合并/变基进行中 → 逐文件 我方/对方 + 中止/继续变基
+// ---------------------------------------------------------------------------
+
+function ConflictStrip({ api, path }: { api: GitcompassApi; path: string }): JSX.Element | null {
+  const { data, reload } = usePoll(() => api.conflictState(path), [path], 4000)
+  const [busy, setBusy] = useState(false)
+  const act = async (fn: () => Promise<unknown>): Promise<void> => {
+    setBusy(true)
+    try { await fn() } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false); reload() }
+  }
+  if (!data || (!data.merging && !data.rebasing && data.files.length === 0)) return null
+  const kind: 'merge' | 'rebase' = data.rebasing ? 'rebase' : 'merge'
+  return (
+    <div className="gc-conflict">
+      <div className="gc-conflict-head">
+        <Icon name="alert" size={13} />
+        <span className="t">{data.rebasing ? t('conflict.rebasing') : t('conflict.merging')}</span>
+        <span className="gc-muted">{data.files.length > 0 ? `${data.files.length} ${t('conflict.files')}` : t('conflict.none')}</span>
+        <span style={{ flex: 1 }} />
+        {data.rebasing && data.files.length === 0 && (
+          <button className="gc-btn primary" disabled={busy} onClick={() => void act(() => api.continueRebase(path))}>{t('conflict.continue')}</button>
+        )}
+        <button className="gc-btn danger" disabled={busy} onClick={() => void act(() => api.abortConflict(path, kind).then((r) => report('ok', t('op.aborted'), (r as { output?: string }).output)))}>{t('conflict.abort')}</button>
+      </div>
+      {data.files.map((f) => (
+        <div key={f.file} className="gc-row" style={{ padding: '1px 2px' }}>
+          <span className="gc-file" title={f.file}>{f.file.split('/').pop()}</span>
+          <span className="gc-path">{f.file.split('/').slice(0, -1).join('/')}</span>
+          <span className="gc-st mod" style={{ opacity: 0.9 }}>{f.code}</span>
+          <span style={{ flex: 1 }} />
+          <button className="gc-btn" disabled={busy} onClick={() => void act(() => api.resolveConflict(path, f.file, 'ours').then((r) => report('ok', t('op.resolved'), (r as { output?: string }).output)))}>{t('conflict.ours')}</button>
+          <button className="gc-btn" disabled={busy} onClick={() => void act(() => api.resolveConflict(path, f.file, 'theirs').then((r) => report('ok', t('op.resolved'), (r as { output?: string }).output)))}>{t('conflict.theirs')}</button>
+        </div>
+      ))}
     </div>
   )
 }
@@ -630,6 +728,17 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
   const [treeView, setTreeView] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const { data: outgoing } = usePoll(() => api.outgoing(path), [path], 10000)
+  // P0/P1：变基拉取开关（持久化）+ 贮藏库展开
+  const [pullRebase, setPullRebaseState] = useState(getPullRebase)
+  const [stashOpen, setStashOpen] = useState(false)
+  const { data: stashData, reload: reloadStash } = usePoll(() => api.stashList(path), [path, stashOpen], stashOpen ? 8000 : 60000)
+  const stashRows = useMemo(() => {
+    if (!stashData || !stashData.ok) return []
+    return (stashData.output ?? '').split('\n').filter((l) => l.trim() !== '').map((l) => {
+      const i = l.indexOf(': ')
+      return { ref: i === -1 ? l.trim() : l.slice(0, i), subject: i === -1 ? '' : l.slice(i + 2) }
+    })
+  }, [stashData])
 
   const act = async (kind: string, fn: () => Promise<unknown>): Promise<void> => {
     setBusy(kind)
@@ -690,6 +799,7 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
               <>
                 <button className="gc-btn sm" disabled={busy !== null} onClick={() => act('stage', () => api.stage(path, row.file))} title={t('actions.stage')}><Icon name="plus" size={13} /></button>
                 <button className="gc-btn sm" disabled={busy !== null} onClick={() => { if (confirm(t('changes.confirmDiscard'))) void act('discard', () => api.discard(path, row.file)) }} title={t('actions.discard')}><Icon name="undo" size={13} /></button>
+                {row.untracked && <button className="gc-btn sm" disabled={busy !== null} onClick={() => void act('ignore', () => api.gitignoreAdd(path, row.file))} title={t('gitignore.add')}><Icon name="ban" size={13} /></button>}
               </>
             )}
           </span>
@@ -721,15 +831,37 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
             <Icon name={treeView ? 'list' : 'folder-tree'} size={13} />
           </button>
           <button className="gc-btn" onClick={() => act('stage', () => api.stageAll(path))} disabled={busy !== null}>{t('changes.stageAll')}</button>
+          <button className="gc-btn sm" disabled={busy !== null} title={`${t('undo.commit')} · ${t('op.undone')}`} onClick={() => void act('undo', () => api.undoCommit(path))}><Icon name="clock-reverse" size={13} /></button>
+          <button className="gc-btn sm" disabled={busy !== null} title={t('amend.last')} onClick={() => void act('amend', () => api.amend(path))}><Icon name="commit" size={13} /></button>
           <button className="gc-btn" onClick={() => act('fetch', () => api.fetch(path))} disabled={busy !== null}>{t('changes.fetch')}</button>
-          <button className="gc-btn" onClick={() => act('pull', () => api.pull(path))} disabled={busy !== null}>{t('changes.pull')}</button>
+          <button
+            className={`gc-btn${pullRebase ? ' primary' : ''}`}
+            title={pullRebase ? t('pull.rebase') : t('changes.pull')}
+            onClick={() => { const next = !pullRebase; setPullRebaseState(next); setPullRebaseFlag(next) }}
+          >{pullRebase ? t('pull.rebase') : t('changes.pull')}</button>
+          <button className="gc-btn" onClick={() => act('pull', () => api.pull(path, pullRebase))} disabled={busy !== null}><Icon name="arrow-down" size={12} /></button>
           <button className="gc-btn" onClick={() => act('push', () => api.push(path))} disabled={busy !== null}>{t('changes.push')}{(flow?.ahead ?? 0) > 0 ? ` ↑${flow?.ahead}` : ''}</button>
         </span>
       </div>
       <div className="gc-row" style={{ marginBottom: 4 }}>
         <button className="gc-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPush(path))}>{t('stash.push')}</button>
         <button className="gc-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPop(path))}>{t('stash.pop')}</button>
+        <button className={`gc-btn${stashOpen ? ' primary' : ''}`} onClick={() => setStashOpen(!stashOpen)} title={t('stash.list')}><Icon name="archive" size={12} />{t('stash.list')}{stashRows.length > 0 ? ` (${stashRows.length})` : ''}</button>
       </div>
+      {stashOpen ? (
+        <div className="gc-stashlist">
+          {stashRows.length === 0 ? <div className="gc-muted" style={{ padding: '2px 4px' }}>{t('stash.empty')}</div> : null}
+          {stashRows.map((s) => (
+            <div key={s.ref} className="gc-row" style={{ padding: '1px 2px' }}>
+              <span className="sha">{s.ref}</span>
+              <span className="sub" title={s.subject}>{s.subject}</span>
+              <span style={{ flex: 1 }} />
+              <button className="gc-btn sm" disabled={busy !== null} title={t('stash.apply')} onClick={() => void act('stashApply', () => api.stashAction(path, 'apply', s.ref)).then(reloadStash)}><Icon name="check" size={12} /></button>
+              <button className="gc-btn sm" disabled={busy !== null} title={t('stash.drop')} onClick={() => { if (confirm(t('stash.dropConfirm'))) void act('stashDrop', () => api.stashAction(path, 'drop', s.ref)).then(reloadStash) }}><Icon name="trash" size={12} /></button>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {error ? <div className="gc-err">{error}</div> : null}
       {groups.map(({ key, label, rows: groupRows, kind }) => {
         if (!groupRows.length) return null
@@ -772,8 +904,12 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
 function Graph({ api, path }: { api: GitcompassApi; path: string }): JSX.Element {
   const { data } = usePoll<GraphView>(() => api.graph(path), [path], 8000)
   const [busySha, setBusySha] = useState<string | null>(null)
+  // P1：历史过滤（作者 / 提交信息，大小写不敏感子串；纯客户端）
+  const [query, setQuery] = useState('')
+  const ql = query.trim().toLowerCase()
 
-  const layout = useMemo(() => data ? layoutGraph(data.commits) : [], [data])
+  const layoutAll = useMemo(() => data ? layoutGraph(data.commits) : [], [data])
+  const layout = useMemo(() => ql === '' ? layoutAll : layoutAll.filter((c) => c.subject.toLowerCase().includes(ql) || c.author.toLowerCase().includes(ql)), [layoutAll, ql])
 
   const doOp = async (sha: string, fn: () => Promise<unknown>, okKey?: string): Promise<void> => {
     setBusySha(sha)
@@ -812,6 +948,10 @@ function Graph({ api, path }: { api: GitcompassApi; path: string }): JSX.Element
 
   return (
     <div>
+      <div className="gc-row">
+        <input className="gc-input" placeholder={t('graph.filter')} value={query} onChange={(e) => setQuery(e.target.value)} />
+        {query !== '' ? <span className="gc-muted" style={{ flex: 'none' }}>{layout.length}</span> : null}
+      </div>
       {layout.map((c) => (
         <div key={c.sha}>
           <div className="gc-commit">
@@ -1062,7 +1202,7 @@ function PRs({ api, repoInfo, auth }: { api: GitcompassApi; repoInfo: RepoInfo |
 // GitHub tab — repo overview + quick PR list + auth
 // ---------------------------------------------------------------------------
 
-function GitHubView({ api, path, repoInfo, auth, reloadAuth, onGotoPrs, device, deviceBusy, onStartDevice, onCheckDevice, onCancelDevice }: {
+function GitHubView({ api, path, repoInfo, auth, reloadAuth, onGotoPrs, device, deviceBusy, onStartDevice, onCheckDevice, onCancelDevice, onCloned }: {
   api: GitcompassApi
   path: string
   repoInfo: RepoInfo | null
@@ -1075,7 +1215,18 @@ function GitHubView({ api, path, repoInfo, auth, reloadAuth, onGotoPrs, device, 
   onStartDevice: () => void
   onCheckDevice: () => void
   onCancelDevice: () => void
+  /** 克隆成功后：父级更新书架清单并切换到新仓库。 */
+  onCloned: (newPath: string) => void
 }): JSX.Element {
+  // P1：从 URL 克隆入架（父目录默认取当前仓库的上一级）
+  const [cloneUrl, setCloneUrl] = useState('')
+  const [cloneParent, setCloneParent] = useState('')
+  const [cloneBusy, setCloneBusy] = useState(false)
+  const defaultParent = useMemo(() => {
+    const norm = path.split('\\').join('/')
+    const i = norm.lastIndexOf('/')
+    return i > 0 ? norm.slice(0, i) : ''
+  }, [path])
   // origin 检查：区分「未登录」与「origin 不是 GitHub」两种未连接原因。
   const [originHint, setOriginHint] = useState<string | null>(null)
   useEffect(() => {
@@ -1159,6 +1310,29 @@ function GitHubView({ api, path, repoInfo, auth, reloadAuth, onGotoPrs, device, 
           </div>
         </div>
       )}
+
+      {/* P1：克隆仓库入架 */}
+      <div className="gc-section" style={{ marginTop: 14 }}><div className="head"><Icon name="globe" size={12} /> {t('clone.title')}</div></div>
+      <div className="gc-row">
+        <input className="gc-input" placeholder={t('clone.url')} value={cloneUrl} onChange={(e) => setCloneUrl(e.target.value)} />
+      </div>
+      <div className="gc-row">
+        <input className="gc-input" placeholder={cloneParent === '' && defaultParent !== '' ? `${t('clone.parent')}: ${defaultParent}` : t('clone.parent')} value={cloneParent} onChange={(e) => setCloneParent(e.target.value)} />
+        <button
+          className="gc-btn"
+          disabled={cloneBusy || cloneUrl.trim() === ''}
+          onClick={() => {
+            const parent = (cloneParent.trim() || defaultParent).trim()
+            if (parent === '') { reportError(t('op.failed'), new Error(t('clone.parent'))); return }
+            setCloneBusy(true)
+            void api.clone(parent, cloneUrl.trim())
+              .then((r) => { report('ok', t('op.cloned'), r.path); setCloneUrl(''); setCloneParent(''); onCloned(r.path) })
+              .catch((e) => reportError(t('op.failed'), e))
+              .finally(() => setCloneBusy(false))
+          }}
+        ><Icon name="plus" size={12} />{t('clone.btn')}</button>
+      </div>
+      <div className="gc-muted" style={{ fontSize: 10 }}>{t('clone.hint')}</div>
     </div>
   )
 }
@@ -1503,6 +1677,9 @@ const OK_TITLES: Record<string, string> = {
   stage: 'op.staged', unstage: 'op.unstaged', discard: 'op.discarded',
   commit: 'op.committed', push: 'op.pushed', pull: 'op.pulled', fetch: 'op.fetched',
   stash: 'op.stashed', apipush: 'op.apiPushed',
+  ignore: 'op.ignored', undo: 'op.undone', amend: 'op.amended',
+  stashApply: 'op.stashApplied', stashDrop: 'op.stashDropped',
+  tagCreate: 'op.tagCreated', tagDelete: 'op.tagDeleted', tagPush: 'op.tagPushed',
 }
 
 /** 渲染错误只损失面板内容，不再炸掉整个宿主 UI；可原地重置。 */
@@ -1540,6 +1717,10 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
   const { data: authState, reload: reloadAuth } = usePoll<GitHubAuthState>(() => api.githubAuth(), [authTick], 5000)
   const [device, setDevice] = useState<Awaited<ReturnType<typeof api.deviceStart>> | null>(null)
   const [deviceBusy, setDeviceBusy] = useState(false)
+  // P0/P1：设置菜单 + Agent 待批徽标 + 冲突状态
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const pendingApprovals = useMemo(() => pendingApprovalCount(agentEvents), [agentEvents])
+  const [, forceRender] = useState(0)
 
   const startDevice = (): void => {
     setDeviceBusy(true)
@@ -1647,6 +1828,31 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
           <button className="gc-btn" onClick={addRepoPrompt} title={t('repo.add')}><Icon name="plus" size={12} />{t('repo.add')}</button>
           <button className="gc-btn sm" onClick={removeCurrentRepo} title={t('repo.removeCurrent')}><Icon name="trash" size={13} /></button>
           <button className="gc-btn" onClick={() => setTick((x) => x + 1)} title={t('common.refresh')}><Icon name="sync" size={12} />{t('common.refresh')}</button>
+          <button className="gc-btn sm" onClick={() => setSettingsOpen(!settingsOpen)} title={t('settings.title')}><Icon name="gear" size={13} /></button>
+          {settingsOpen ? (
+            <div className="gc-settings">
+              <div className="gc-settings-row">
+                <span className="gc-muted">{t('settings.language')}</span>
+                {([null, 'zh', 'en'] as const).map((loc) => (
+                  <button
+                    key={loc ?? 'auto'}
+                    className={`gc-btn${getLocaleOverride() === loc ? ' primary' : ''}`}
+                    onClick={() => { setLocaleOverride(loc); forceRender((x) => x + 1) }}
+                  >{loc === null ? t('settings.langAuto') : loc === 'zh' ? t('settings.langZh') : t('settings.langEn')}</button>
+                ))}
+              </div>
+              <div className="gc-settings-row">
+                <span className="gc-muted">{t('settings.poll')}</span>
+                {(['fast', 'std', 'slow'] as const).map((spd) => (
+                  <button
+                    key={spd}
+                    className={`gc-btn${pollSpeed === spd ? ' primary' : ''}`}
+                    onClick={() => { setPollSpeed(spd); forceRender((x) => x + 1) }}
+                  >{spd === 'fast' ? t('settings.pollFast') : spd === 'std' ? t('settings.pollStd') : t('settings.pollSlow')}</button>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
       <FlowStrip flow={flow} />
@@ -1655,6 +1861,7 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
           <div key={id} className={`gc-tab ${tab === id ? 'on' : ''}`} onClick={() => setTab(id)}>
             <Icon className="gc-ic" name={TAB_ICONS[id]} size={13} />
             {t(key)}
+            {id === 'agent' && pendingApprovals > 0 ? <span className="gc-badge">{pendingApprovals}</span> : null}
           </div>
         ))}
       </div>
@@ -1662,12 +1869,13 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
       <div className="gc-body">
         {!path ? <div className="gc-empty">{t('repo.none')}</div> : (
           <>
+            <ConflictStrip api={api} path={path} />
             {tab === 'branches' && <Branches api={api} path={path} />}
             {tab === 'changes' && <Changes api={api} path={path} flow={flow} />}
             {tab === 'graph' && <Graph api={api} path={path} />}
             {tab === 'prs' && <PRs api={api} repoInfo={repoInfo} auth={authState} />}
             {tab === 'issues' && <Issues api={api} repoInfo={repoInfo} auth={authState} />}
-            {tab === 'github' && <GitHubView api={api} path={path} repoInfo={repoInfo} auth={authState} reloadAuth={reloadAuth} onGotoPrs={() => setTab('prs')} device={device} deviceBusy={deviceBusy} onStartDevice={startDevice} onCheckDevice={checkDevice} onCancelDevice={() => setDevice(null)} />}
+            {tab === 'github' && <GitHubView api={api} path={path} repoInfo={repoInfo} auth={authState} reloadAuth={reloadAuth} onGotoPrs={() => setTab('prs')} device={device} deviceBusy={deviceBusy} onStartDevice={startDevice} onCheckDevice={checkDevice} onCancelDevice={() => setDevice(null)} onCloned={(newPath) => { void api.workspaces().then((ws) => { setWorkspaces(ws); setPath(newPath); setTick((x) => x + 1) }).catch(() => {}) }} />}
             {tab === 'agent' && <AgentView api={api} events={agentEvents} />}
           </>
         )}

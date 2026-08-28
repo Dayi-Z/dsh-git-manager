@@ -252,7 +252,8 @@ export function route(services: Services) {
       }
       case '/gitu/pull': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
-        return wrap(async () => await service.pull(root))
+        const rebase = boolField(payload, 'rebase') ?? false
+        return wrap(async () => await service.pull(root, rebase))
       }
       case '/gitu/fetch': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
@@ -351,6 +352,71 @@ export function route(services: Services) {
       case '/gitu/stash-pop': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.stashPop(root))
+      }
+      // 贮藏明细：按引用 应用（保留栈）/ 丢弃
+      case '/gitu/stash-apply': {
+        const ref = field(payload, 'ref'); const action = field(payload, 'action') ?? 'apply'
+        if (root === null || ref === null || (action !== 'apply' && action !== 'drop')) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.stashAction(root, action, ref))
+      }
+      // 撤销最近一次提交（soft reset，改动保留在暂存区）
+      case '/gitu/undo-commit':
+        if (root === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.undoCommit(root))
+      // 修补最近一次提交（amend）
+      case '/gitu/amend': {
+        if (root === null) return fail(res, BAD_REQUEST, 400)
+        const message = field(payload, 'message') ?? undefined
+        return wrap(async () => await service.amendCommit(root, message))
+      }
+      // 冲突状态与出口：逐文件 我方/对方、中止、变基继续
+      case '/gitu/conflict-state':
+        if (root === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.conflictState(root))
+      case '/gitu/conflict-resolve': {
+        const file = field(payload, 'file'); const side = field(payload, 'side')
+        if (root === null || file === null || (side !== 'ours' && side !== 'theirs')) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.resolveConflict(root, file, side))
+      }
+      case '/gitu/conflict-abort': {
+        const kind = field(payload, 'kind')
+        if (root === null || (kind !== 'merge' && kind !== 'rebase')) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.abortConflict(root, kind))
+      }
+      case '/gitu/rebase-continue':
+        if (root === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.continueRebase(root))
+      // 标签：列表 / 建（可注释）/ 删 / 推
+      case '/gitu/tags':
+        if (root === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.tags(root))
+      case '/gitu/tag-create': {
+        const name = field(payload, 'name'); if (root === null || name === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.tagCreate(root, name, field(payload, 'message') ?? undefined))
+      }
+      case '/gitu/tag-delete': {
+        const name = field(payload, 'name'); if (root === null || name === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.tagDelete(root, name))
+      }
+      case '/gitu/tag-push': {
+        const name = field(payload, 'name'); if (root === null || name === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.tagPush(root, name))
+      }
+      // 未跟踪文件一键加入 .gitignore
+      case '/gitu/gitignore-add': {
+        const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.gitignoreAdd(root, file))
+      }
+      // 从 URL 克隆到父目录并登记书架，返回完整清单
+      case '/gitu/clone': {
+        const parent = field(payload, 'parent'); const url = field(payload, 'url')
+        if (parent === null || url === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => {
+          const r = await service.cloneRepo(parent, url)
+          const canonical = await realpath(r.path)
+          shelfAdd({ path: canonical, title: canonical.split(/[\\/]/).pop() })
+          return { path: canonical, workspaces: await listGitWorkspaces(ctx) }
+        })
       }
       case '/gitu/cherry-pick': {
         const sha = field(payload, 'sha'); if (root === null || sha === null) return fail(res, BAD_REQUEST, 400)

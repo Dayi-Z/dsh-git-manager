@@ -115,6 +115,55 @@ const zh: Dict = {
   'stash.pop': '恢复贮藏',
   'stash.empty': '无贮藏',
   'stash.messagePlaceholder': '贮藏说明…',
+  'stash.list': '贮藏库',
+  'stash.apply': '应用',
+  'stash.drop': '丢弃',
+  'stash.dropConfirm': '确认丢弃该条贮藏？此操作不可恢复。',
+  'conflict.merging': '合并进行中',
+  'conflict.rebasing': '变基进行中',
+  'conflict.files': '个冲突文件',
+  'conflict.ours': '采用我方',
+  'conflict.theirs': '采用对方',
+  'conflict.abort': '中止',
+  'conflict.continue': '继续变基',
+  'conflict.none': '无未解决冲突（可继续）',
+  'op.undone': '已撤销最近提交（改动保留在暂存区）',
+  'op.amended': '已修补最近提交',
+  'op.stashApplied': '贮藏已应用',
+  'op.stashDropped': '贮藏已丢弃',
+  'op.resolved': '冲突已解决并暂存',
+  'op.aborted': '已中止操作',
+  'op.rebaseContinued': '变基已继续',
+  'op.ignored': '已加入 .gitignore',
+  'op.tagCreated': '标签已创建',
+  'op.tagDeleted': '标签已删除',
+  'op.tagPushed': '标签已推送',
+  'op.cloned': '克隆完成并已登记',
+  'undo.commit': '撤销提交',
+  'undo.commitShort': '撤销',
+  'amend.last': '修补上次',
+  'pull.rebase': '变基拉取',
+  'tags.title': '标签',
+  'tags.placeholder': '标签名…',
+  'tags.msgPlaceholder': '注释（可选）',
+  'tags.create': '建标签',
+  'tags.none': '无标签',
+  'gitignore.add': '加入 .gitignore',
+  'graph.filter': '过滤作者或提交信息…',
+  'clone.title': '克隆仓库',
+  'clone.url': '远程地址（https:// 或 git@）',
+  'clone.parent': '克隆到目录',
+  'clone.btn': '克隆并登记',
+  'clone.hint': 'github.com 直连恢复前可能失败，可用 gh 通道克隆',
+  'settings.title': '设置',
+  'settings.language': '语言',
+  'settings.langAuto': '跟随宿主',
+  'settings.langZh': '中文',
+  'settings.langEn': 'English',
+  'settings.poll': '轮询速度',
+  'settings.pollFast': '快',
+  'settings.pollStd': '标准',
+  'settings.pollSlow': '慢',
   'github.connect': '连接 GitHub',
   'github.connected': '已连接',
   'github.notConnected': '未连接',
@@ -304,6 +353,55 @@ const en: Dict = {
   'stash.pop': 'Pop stash',
   'stash.empty': 'No stashes',
   'stash.messagePlaceholder': 'Stash message…',
+  'stash.list': 'Stash list',
+  'stash.apply': 'Apply',
+  'stash.drop': 'Drop',
+  'stash.dropConfirm': 'Drop this stash entry? This cannot be undone.',
+  'conflict.merging': 'Merge in progress',
+  'conflict.rebasing': 'Rebase in progress',
+  'conflict.files': 'conflicted file(s)',
+  'conflict.ours': 'Take ours',
+  'conflict.theirs': 'Take theirs',
+  'conflict.abort': 'Abort',
+  'conflict.continue': 'Continue rebase',
+  'conflict.none': 'No unresolved conflicts (ready to continue)',
+  'op.undone': 'Last commit undone (changes kept staged)',
+  'op.amended': 'Last commit amended',
+  'op.stashApplied': 'Stash applied',
+  'op.stashDropped': 'Stash dropped',
+  'op.resolved': 'Conflict resolved and staged',
+  'op.aborted': 'Operation aborted',
+  'op.rebaseContinued': 'Rebase continued',
+  'op.ignored': 'Added to .gitignore',
+  'op.tagCreated': 'Tag created',
+  'op.tagDeleted': 'Tag deleted',
+  'op.tagPushed': 'Tag pushed',
+  'op.cloned': 'Cloned and registered',
+  'undo.commit': 'Undo commit',
+  'undo.commitShort': 'Undo',
+  'amend.last': 'Amend last',
+  'pull.rebase': 'Pull with rebase',
+  'tags.title': 'Tags',
+  'tags.placeholder': 'Tag name…',
+  'tags.msgPlaceholder': 'Annotation (optional)',
+  'tags.create': 'Create tag',
+  'tags.none': 'No tags',
+  'gitignore.add': 'Add to .gitignore',
+  'graph.filter': 'Filter by author or message…',
+  'clone.title': 'Clone repository',
+  'clone.url': 'Remote URL (https:// or git@)',
+  'clone.parent': 'Clone into directory',
+  'clone.btn': 'Clone & register',
+  'clone.hint': 'May fail while github.com is unreachable; use the gh channel instead',
+  'settings.title': 'Settings',
+  'settings.language': 'Language',
+  'settings.langAuto': 'Follow host',
+  'settings.langZh': '中文',
+  'settings.langEn': 'English',
+  'settings.poll': 'Polling speed',
+  'settings.pollFast': 'Fast',
+  'settings.pollStd': 'Standard',
+  'settings.pollSlow': 'Slow',
   'github.connect': 'Connect GitHub',
   'github.connected': 'Connected',
   'github.notConnected': 'Not connected',
@@ -386,13 +484,38 @@ const en: Dict = {
 
 let dict: Dict = zh
 
+// 用户语言覆盖：'zh' | 'en' | null（跟随宿主）。localStorage 持久化。
+let override: 'zh' | 'en' | null = null
+let hostActive = 'zh'
+try {
+  const saved = localStorage.getItem('gc.locale')
+  if (saved === 'zh' || saved === 'en') override = saved
+} catch { /* no storage */ }
+
+export function setLocaleOverride(locale: 'zh' | 'en' | null): void {
+  override = locale
+  try { localStorage.setItem('gc.locale', locale ?? '') } catch { /* no storage */ }
+  applyLocale()
+}
+
+export function getLocaleOverride(): 'zh' | 'en' | null {
+  return override
+}
+
+function applyLocale(): void {
+  if (override === 'zh') { dict = zh; return }
+  if (override === 'en') { dict = en; return }
+  dict = hostActive.toLowerCase().startsWith('en') ? en : zh
+}
+
 export function initI18n(locale: { getLocale(): { active: string }; subscribe(fn: () => void): () => void }): void {
   const apply = (): void => {
     try {
-      dict = locale.getLocale().active.toLowerCase().startsWith('en') ? en : zh
+      hostActive = locale.getLocale().active
     } catch {
-      dict = zh
+      hostActive = 'zh'
     }
+    applyLocale()
   }
   apply()
   locale.subscribe(apply)

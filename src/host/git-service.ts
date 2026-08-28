@@ -5,7 +5,7 @@
  * @module gitcompass/host/git-service
  */
 
-import { realpath, readFile } from 'node:fs/promises'
+import { realpath, readFile, writeFile } from 'node:fs/promises'
 import { existsSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -208,9 +208,9 @@ export class GitService {
     return { ok: true, output: run.stdout.trim() }
   }
 
-  async pull(path: string): Promise<OpResult> {
+  async pull(path: string, rebase = false): Promise<OpResult> {
     const canonical = await this.requireWorkspace(path)
-    const run = await this.runner.run(['pull'], canonical)
+    const run = await this.runner.run(rebase ? ['pull', '--rebase', '--autostash'] : ['pull'], canonical)
     if (run.exitCode !== 0) {
       return { ok: false, output: run.stdout, error: { code: 'pull-failed', message: run.stderr.trim() || 'git pull failed' } }
     }
@@ -311,6 +311,183 @@ export class GitService {
       return { ok: false, output: run.stdout, error: { code: 'stash-pop-failed', message: run.stderr.trim() || 'git stash pop failed' } }
     }
     return { ok: true, output: run.stdout.trim() }
+  }
+
+  // ---------------------------------------------------------------------------
+  // P0/P1 批量补全：冲突 / 撤销 / 修补 / 贮藏明细 / 标签 / gitignore / 克隆
+  // ---------------------------------------------------------------------------
+
+  /** 冲突状态：未合并文件 + 进行中的合并/变基探测（MERGE_HEAD / REBASE_HEAD）。 */
+  async conflictState(path: string): Promise<{ merging: boolean; rebasing: boolean; files: Array<{ file: string; code: string }> }> {
+    const canonical = await this.requireWorkspace(path)
+    const status = await this.runner.run(['status', '--porcelain'], canonical)
+    const files: Array<{ file: string; code: string }> = []
+    if (status.exitCode === 0) {
+      for (const line of status.stdout.split('\n')) {
+        if (line.length < 4) continue
+        const code = line.slice(0, 2)
+        const file = line.slice(3).trim()
+        if (code.includes('U') || code === 'AA' || code === 'DD') files.push({ file, code })
+      }
+    }
+    const merging = (await this.runner.run(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], canonical)).exitCode === 0
+    const rebasing = (await this.runner.run(['rev-parse', '-q', '--verify', 'REBASE_HEAD'], canonical)).exitCode === 0
+    return { merging, rebasing, files }
+  }
+
+  /** 解决单个冲突文件：采用我方/对方版本并暂存。 */
+  async resolveConflict(path: string, file: string, side: 'ours' | 'theirs'): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const pick = await this.runner.run(['checkout', side === 'ours' ? '--ours' : '--theirs', '--', file], canonical)
+    if (pick.exitCode !== 0) {
+      return { ok: false, output: pick.stdout, error: { code: 'resolve-failed', message: pick.stderr.trim() || 'git checkout --ours/--theirs failed' } }
+    }
+    const add = await this.runner.run(['add', '--', file], canonical)
+    if (add.exitCode !== 0) {
+      return { ok: false, output: add.stdout, error: { code: 'resolve-failed', message: add.stderr.trim() || 'git add failed' } }
+    }
+    return { ok: true, output: `${file}：已采用${side === 'ours' ? '我方' : '对方'}版本并暂存` }
+  }
+
+  /** 中止进行中的合并/变基，恢复到操作前状态。 */
+  async abortConflict(path: string, kind: 'merge' | 'rebase'): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const run = await this.runner.run(kind === 'merge' ? ['merge', '--abort'] : ['rebase', '--abort'], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'abort-failed', message: run.stderr.trim() || `git ${kind} --abort failed` } }
+    }
+    return { ok: true, output: kind === 'merge' ? '已中止合并' : '已中止变基' }
+  }
+
+  /** 变基继续（-c core.editor=true 防止交互编辑器挂起子进程）。 */
+  async continueRebase(path: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const run = await this.runner.run(['-c', 'core.editor=true', 'rebase', '--continue'], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'rebase-continue-failed', message: run.stderr.trim() || 'git rebase --continue failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() || '变基继续完成' }
+  }
+
+  /** 撤销最近一次提交（soft reset，改动完整保留在暂存区）。根提交不可撤销。 */
+  async undoCommit(path: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const parents = await this.runner.run(['rev-list', '--parents', '-n', '1', 'HEAD'], canonical)
+    if (parents.exitCode !== 0 || parents.stdout.trim().split(/\s+/).length < 2) {
+      return { ok: false, output: '', error: { code: 'root-commit', message: '根提交无法撤销' } }
+    }
+    const run = await this.runner.run(['reset', '--soft', 'HEAD~1'], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'undo-failed', message: run.stderr.trim() || 'git reset --soft HEAD~1 failed' } }
+    }
+    return { ok: true, output: '已撤销最近一次提交（改动保留在暂存区）' }
+  }
+
+  /** 修补最近一次提交（amend）：给新信息则改写信息，否则保留原信息并入当前暂存。 */
+  async amendCommit(path: string, message?: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const msg = message?.trim()
+    const run = await this.runner.run(msg ? ['commit', '--amend', '-m', msg] : ['commit', '--amend', '--no-edit'], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'amend-failed', message: run.stderr.trim() || 'git commit --amend failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() || '已修补最近一次提交' }
+  }
+
+  /** 贮藏明细操作：apply（保留栈）/ drop（丢弃指定条目）。 */
+  async stashAction(path: string, action: 'apply' | 'drop', ref: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const clean = ref.trim()
+    if (!/^stash@\{\d+\}$/.test(clean)) {
+      return { ok: false, output: '', error: { code: 'bad-ref', message: `非法贮藏引用：${ref}` } }
+    }
+    const run = await this.runner.run(['stash', action, clean], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: `stash-${action}-failed`, message: run.stderr.trim() || `git stash ${action} failed` } }
+    }
+    return { ok: true, output: run.stdout.trim() || `${clean} ${action === 'apply' ? '已应用' : '已丢弃'}` }
+  }
+
+  /** 标签列表（名称 + 创建日期，按时间倒序）。 */
+  async tags(path: string): Promise<Array<{ name: string; date: string }>> {
+    const canonical = await this.requireWorkspace(path)
+    const run = await this.runner.run(['tag', '-l', '--sort=-creatordate', '--format=%(refname:short)%1f%(creatordate:short)'], canonical)
+    if (run.exitCode !== 0) return []
+    return run.stdout.split('\n').filter((l) => l.trim() !== '').map((line) => {
+      const i = line.indexOf(FIELD)
+      return i < 0 ? { name: line.trim(), date: '' } : { name: line.slice(0, i), date: line.slice(i + 1) }
+    })
+  }
+
+  /** 建标签：给信息则注释标签（-a -m），否则轻量标签。 */
+  async tagCreate(path: string, name: string, message?: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const clean = name.trim()
+    if (clean === '') return { ok: false, output: '', error: { code: 'bad-name', message: '标签名不能为空' } }
+    const msg = message?.trim()
+    const run = await this.runner.run(msg ? ['tag', '-a', clean, '-m', msg] : ['tag', clean], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'tag-create-failed', message: run.stderr.trim() || 'git tag failed' } }
+    }
+    return { ok: true, output: `标签 ${clean} 已创建` }
+  }
+
+  /** 删除本地标签。 */
+  async tagDelete(path: string, name: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const run = await this.runner.run(['tag', '-d', name.trim()], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'tag-delete-failed', message: run.stderr.trim() || 'git tag -d failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() }
+  }
+
+  /** 推送单个标签到 origin。 */
+  async tagPush(path: string, name: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const run = await this.runner.run(['push', 'origin', name.trim()], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'tag-push-failed', message: run.stderr.trim() || 'git push tag failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() || `标签 ${name} 已推送` }
+  }
+
+  /** 未跟踪文件一键加入 .gitignore（幂等：已存在则跳过；随后暂存 .gitignore）。 */
+  async gitignoreAdd(path: string, file: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const entry = file.split('\\').join('/')
+    const gi = join(canonical, '.gitignore')
+    let text = ''
+    try { text = await readFile(gi, 'utf8') } catch { /* 新文件 */ }
+    if (text.split(/\r?\n/).some((l) => l.trim() === entry)) {
+      return { ok: true, output: `${entry} 已在 .gitignore 中` }
+    }
+    const next = (text === '' || text.endsWith('\n') ? text : text + '\n') + entry + '\n'
+    await writeFile(gi, next, 'utf8')
+    await this.runner.run(['add', '--', '.gitignore'], canonical)
+    return { ok: true, output: `${entry} → .gitignore（已暂存）` }
+  }
+
+  /** 克隆远程仓库到父目录下并返回新路径（克隆成功后由路由层登记书架）。 */
+  async cloneRepo(parent: string, url: string): Promise<{ path: string }> {
+    let canonicalParent: string
+    try { canonicalParent = await realpath(parent) } catch {
+      throw Object.assign(new Error('父目录不存在'), { gitError: { code: 'bad-request', message: 'parent not found' } })
+    }
+    const cleanUrl = url.trim()
+    if (!/^(https:\/\/|git@|ssh:\/\/)/.test(cleanUrl) || /\s/.test(cleanUrl)) {
+      throw Object.assign(new Error('仅支持 https / git@ / ssh 远程地址'), { gitError: { code: 'bad-request', message: 'unsupported url' } })
+    }
+    const name = (cleanUrl.split(/[\\/]/).pop() ?? 'repo').replace(/\.git$/, '') || 'repo'
+    const target = join(canonicalParent, name)
+    if (existsSync(join(target, '.git'))) {
+      throw Object.assign(new Error(`目标目录已存在仓库：${target}`), { gitError: { code: 'conflict', message: 'target exists' } })
+    }
+    const run = await this.runner.run(['clone', cleanUrl, target], canonicalParent)
+    if (run.exitCode !== 0) {
+      throw Object.assign(new Error(run.stderr.trim() || 'git clone failed'), { gitError: { code: 'clone-failed', message: run.stderr.trim() || 'git clone failed' } })
+    }
+    return { path: target }
   }
 
   /** cherry-pick 一个提交到当前分支（git cherry-pick <sha>）。 */

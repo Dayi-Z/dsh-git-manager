@@ -8,6 +8,7 @@ export type IconName =
   | 'arrow-up' | 'arrow-down' | 'sync' | 'archive'
   | 'folder' | 'folder-tree' | 'list' | 'eye' | 'comment' | 'bot' | 'globe'
   | 'success' | 'alert' | 'copy' | 'external' | 'trash' | 'clock' | 'clock-reverse'
+  | 'gear' | 'ban' | 'tag'
 
 const PATHS: Record<IconName, JSX.Element> = {
   'git-branch': (
@@ -174,6 +175,24 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M3.2 4.4v3.4h3.4" />
       <path d="M2.7 7.8a5.5 5.5 0 1 0 1.6-3.9L2.6 5.6" />
       <path d="M8 5.4V8l2 1.4" />
+    </>
+  ),
+  gear: (
+    <>
+      <circle cx="8" cy="8" r="2" />
+      <path d="M8 1.8v1.9M8 12.3v1.9M1.8 8h1.9M12.3 8h1.9M3.6 3.6l1.35 1.35M11.05 11.05l1.35 1.35M12.4 3.6l-1.35 1.35M4.95 11.05L3.6 12.4" />
+    </>
+  ),
+  ban: (
+    <>
+      <circle cx="8" cy="8" r="5.6" />
+      <path d="M4.2 11.8 11.8 4.2" />
+    </>
+  ),
+  tag: (
+    <>
+      <path d="M2.2 7.2V2.2h5l6.6 6.6-5 5z" />
+      <circle cx="5.2" cy="5.2" r="1" fill="currentColor" stroke="none" />
     </>
   ),
 }

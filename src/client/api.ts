@@ -95,7 +95,7 @@ export class GitcompassApi {
   unstage(path: string, file: string): Promise<OpResult> { return call('/gitu/unstage', { path, file }) }
   stageAll(path: string): Promise<OpResult> { return call('/gitu/stage-all', { path }) }
   push(path: string): Promise<OpResult> { return call('/gitu/push', { path }) }
-  pull(path: string): Promise<OpResult> { return call('/gitu/pull', { path }) }
+  pull(path: string, rebase = false): Promise<OpResult> { return call('/gitu/pull', { path, rebase }) }
   fetch(path: string): Promise<OpResult> { return call('/gitu/fetch', { path }) }
   switchBranch(path: string, branch: string): Promise<OpResult> { return call('/gitu/switch', { path, branch }) }
   createBranch(path: string, branch: string): Promise<OpResult> { return call('/gitu/create-branch', { path, branch }) }
@@ -192,5 +192,56 @@ export class GitcompassApi {
   /** gh/API 通道推送：github.com 直连不可用时的恢复路径（逐提交在 GitHub 端重建）。 */
   apiPush(path: string): Promise<OpResult> {
     return call('/gitu/api-push', { path })
+  }
+  /** 拉取（rebase = 变基式拉取，带 autostash）。 */
+  /** 贮藏明细操作：apply 保留栈 / drop 丢弃指定条目。 */
+  stashAction(path: string, action: 'apply' | 'drop', ref: string): Promise<OpResult> {
+    return call('/gitu/stash-apply', { path, action, ref })
+  }
+  /** 撤销最近一次提交（soft reset，改动保留在暂存区）。 */
+  undoCommit(path: string): Promise<OpResult> {
+    return call('/gitu/undo-commit', { path })
+  }
+  /** 修补最近一次提交（amend）：给新信息则改写，否则保留原信息。 */
+  amend(path: string, message?: string): Promise<OpResult> {
+    return call('/gitu/amend', { path, message: message ?? '' })
+  }
+  /** 冲突状态：未合并文件 + 合并/变基进行中标记。 */
+  conflictState(path: string): Promise<{ merging: boolean; rebasing: boolean; files: Array<{ file: string; code: string }> }> {
+    return call('/gitu/conflict-state', { path })
+  }
+  /** 解决冲突：采用我方/对方版本并暂存。 */
+  resolveConflict(path: string, file: string, side: 'ours' | 'theirs'): Promise<OpResult> {
+    return call('/gitu/conflict-resolve', { path, file, side })
+  }
+  /** 中止合并/变基。 */
+  abortConflict(path: string, kind: 'merge' | 'rebase'): Promise<OpResult> {
+    return call('/gitu/conflict-abort', { path, kind })
+  }
+  /** 变基继续。 */
+  continueRebase(path: string): Promise<OpResult> {
+    return call('/gitu/rebase-continue', { path })
+  }
+  /** 标签列表（名称 + 日期，时间倒序）。 */
+  tags(path: string): Promise<Array<{ name: string; date: string }>> {
+    return call('/gitu/tags', { path })
+  }
+  /** 建标签：给信息则注释标签。 */
+  tagCreate(path: string, name: string, message?: string): Promise<OpResult> {
+    return call('/gitu/tag-create', { path, name, message: message ?? '' })
+  }
+  tagDelete(path: string, name: string): Promise<OpResult> {
+    return call('/gitu/tag-delete', { path, name })
+  }
+  tagPush(path: string, name: string): Promise<OpResult> {
+    return call('/gitu/tag-push', { path, name })
+  }
+  /** 未跟踪文件一键加入 .gitignore（幂等）。 */
+  gitignoreAdd(path: string, file: string): Promise<OpResult> {
+    return call('/gitu/gitignore-add', { path, file })
+  }
+  /** 从 URL 克隆到父目录并登记书架。 */
+  clone(parent: string, url: string): Promise<{ path: string }> {
+    return call('/gitu/clone', { parent, url })
   }
 }
