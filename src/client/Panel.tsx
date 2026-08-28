@@ -41,7 +41,7 @@ const css = `
   --gc-shadow:0 8px 24px rgba(0,0,0,.10);
   --gc-accent:#1a7f37; --gc-accent-soft:rgba(26,127,55,.11);
   --gc-red:#cf222e; --gc-amber:#9a6700; --gc-info:#0969da;
-  --gc-del-bg:rgba(207,34,46,.10); --gc-add-bg:rgba(26,127,55,.13);
+  --gc-del-bg:rgba(207,34,46,.16); --gc-add-bg:rgba(26,127,55,.18);
   font-size:12px;line-height:1.5;color:var(--gc-fg);display:flex;flex-direction:column;height:100%;min-width:0
 }
 /* 浏览器表面也属于设计：滚动条 / 选区 / 焦点全部主题化 */
@@ -56,7 +56,7 @@ body[data-ds-dark-theme] .gitcompass-panel{
   --gc-shadow:0 8px 24px rgba(0,0,0,.35);
   --gc-accent:#3fb950; --gc-accent-soft:rgba(63,185,80,.13);
   --gc-red:#f85149; --gc-amber:#d29922; --gc-info:#58a6ff;
-  --gc-del-bg:rgba(248,81,73,.15); --gc-add-bg:rgba(46,160,67,.15);
+  --gc-del-bg:rgba(248,81,73,.22); --gc-add-bg:rgba(46,160,67,.22);
 }
 .gitcompass-panel *{box-sizing:border-box;font-family:inherit}
 .gc-head{padding:8px;border-bottom:1px solid var(--gc-border)}
@@ -130,7 +130,13 @@ body[data-ds-dark-theme] .gitcompass-panel{
 .gc-divbar .ahead{background:var(--gc-accent);height:100%}
 .gc-issue{border:1px solid var(--gc-border);border-radius:8px;padding:7px 8px;margin-bottom:6px;cursor:pointer;transition:border-color .12s,box-shadow .12s}
 .gc-issue:hover{border-color:var(--gc-accent);box-shadow:var(--gc-shadow)}
-.gc-diff{font-family:var(--gc-mono);font-size:11px;padding:4px 8px;background:var(--gc-bg-soft);border-radius:6px;margin:4px 0;overflow:auto;max-height:300px;white-space:pre}
+.gc-diff{font-family:var(--gc-mono);font-size:11px;line-height:1.6;padding:4px 0;background:var(--gc-bg-soft);border-radius:6px;margin:4px 0;overflow:auto;max-height:320px;white-space:pre}
+/* 统一 diff 行级着色：删除红底 / 新增绿底（加深），hunk 与文件元信息弱化 */
+.gc-dl{display:block;padding:0 10px}
+.gc-dl.add{background:var(--gc-add-bg)}
+.gc-dl.del{background:var(--gc-del-bg)}
+.gc-dl.hunk{color:var(--gc-info);opacity:.8}
+.gc-dl.meta{opacity:.42;font-size:10px}
 /* Trae 式变更页 */
 .gc-commitbox{display:flex;gap:6px;margin-bottom:8px}
 .gc-commitbox .gc-input{flex:1;min-width:0}
@@ -523,6 +529,28 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// 统一 diff 渲染：+/− 行红绿底、@@ hunk 头、文件元信息弱化
+// ---------------------------------------------------------------------------
+
+function DiffView({ patch, loading }: { patch: string; loading?: boolean }): JSX.Element {
+  const lines = useMemo(() => patch.split('\n'), [patch])
+  if (loading) return <div className="gc-diff">{t('common.loading')}</div>
+  if (!patch) return <div className="gc-diff gc-muted">{t('diff.empty')}</div>
+  return (
+    <div className="gc-diff">
+      {lines.map((l, i) => {
+        let cls = ''
+        if (l.startsWith('diff ') || l.startsWith('index ') || l.startsWith('--- ') || l.startsWith('+++ ')) cls = 'meta'
+        else if (l.startsWith('@@')) cls = 'hunk'
+        else if (l.startsWith('+')) cls = 'add'
+        else if (l.startsWith('-')) cls = 'del'
+        return <span key={i} className={`gc-dl ${cls}`}>{l === '' ? '\u00a0' : l}</span>
+      })}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Changes tab — Trae 式源代码管理：提交框置顶 / 状态字母 / 树视图 / 传出的更改
 // ---------------------------------------------------------------------------
 
@@ -668,7 +696,7 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
           <span className={stClass(letter)}>{letter}</span>
         </div>
         {diffFile === row.file && (
-          <div className="gc-diff">{diffLoading ? '...' : diffData || t('diff.empty')}</div>
+          <DiffView patch={diffLoading ? '' : diffData} loading={diffLoading} />
         )}
       </div>
     )
@@ -763,6 +791,7 @@ function Graph({ api, path }: { api: GitcompassApi; path: string }): JSX.Element
   const [openFiles, setOpenFiles] = useState<Array<{ path: string; additions: number | null; deletions: number | null }>>([])
   const [openFile, setOpenFile] = useState<string | null>(null)
   const [patch, setPatch] = useState<string>('')
+  const [patchLoading, setPatchLoading] = useState(false)
   const [drillLoading, setDrillLoading] = useState(false)
 
   const toggleSha = async (sha: string): Promise<void> => {
@@ -772,8 +801,8 @@ function Graph({ api, path }: { api: GitcompassApi; path: string }): JSX.Element
   }
   const openPatch = async (sha: string, file: string): Promise<void> => {
     if (openFile === file) { setOpenFile(null); setPatch(''); return }
-    setOpenFile(file); setPatch('')
-    try { const r = await api.commitPatch(path, sha, file); setPatch(r.patch) } catch { setPatch('(patch error)') }
+    setOpenFile(file); setPatch(''); setPatchLoading(true)
+    try { const r = await api.commitPatch(path, sha, file); setPatch(r.patch) } catch { setPatch('') } finally { setPatchLoading(false) }
   }
 
   if (!data) return <div className="gc-empty">{t('common.loading')}</div>
@@ -813,7 +842,7 @@ function Graph({ api, path }: { api: GitcompassApi; path: string }): JSX.Element
                     {f.additions !== null ? <span className="gc-numstat">+{f.additions}</span> : null}
                     {f.deletions !== null ? <span className="gc-numstat del">−{f.deletions}</span> : null}
                   </div>
-                  {openFile === f.path ? <div className="gc-diff">{patch || '...'}</div> : null}
+                  {openFile === f.path ? <DiffView patch={patch} loading={patchLoading} /> : null}
                 </div>
               ))}
             </div>
