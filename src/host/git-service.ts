@@ -498,7 +498,11 @@ export class GitService {
     try {
       const ref = await ghApi<{ object: { sha: string } }>('GET', `${repoPath}/git/ref/heads/${encodeURIComponent(branch)}`)
       let apiHead = ref.object.sha
-      if (apiHead === head) return { ok: true, output: '远端已与本地一致（up to date）' }
+      if (apiHead === head) {
+        // 短路路径同样校准本地跟踪引用——远端为真，缓存过期只是本地视角问题
+        if (upstreamRef !== '') await this.runner.run(['update-ref', `refs/remotes/${upstreamRef}`, apiHead], canonical)
+        return { ok: true, output: '远端已与本地一致（up to date）' }
+      }
       let apiTree = (await ghApi<{ tree: { sha: string } }>('GET', `${repoPath}/git/commits/${apiHead}`)).tree.sha
       // 待推提交（旧→新），完整元数据逐字段保留。
       // FIELD 紧跟 %H，REC 作整条记录终止符——split(REC) 后每条记录 = sha⒟an⒟ae⒟…⒟message。
