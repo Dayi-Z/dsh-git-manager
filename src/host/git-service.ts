@@ -294,6 +294,10 @@ export class GitService {
       : ['stash', 'push']
     const run = await this.runner.run(argv, canonical)
     if (run.exitCode !== 0) {
+      // 工作区干净时 stash 报 "No local changes"：这是预期状态，不是失败
+      if (/no local changes/i.test(run.stderr + run.stdout)) {
+        return { ok: true, output: '工作区干净，无需贮藏' }
+      }
       return { ok: false, output: run.stdout, error: { code: 'stash-failed', message: run.stderr.trim() || 'git stash push failed' } }
     }
     return { ok: true, output: run.stdout.trim() }
@@ -485,6 +489,9 @@ export class GitService {
     if (!parsed) return { ok: false, output: '', error: { code: 'not-github', message: 'origin 不是 GitHub 仓库，API 推送仅支持 GitHub 远端' } }
     const branch = (await this.runner.run(['rev-parse', '--abbrev-ref', 'HEAD'], canonical)).stdout.trim()
     if (!branch || branch === 'HEAD') return { ok: false, output: '', error: { code: 'detached-head', message: '当前处于 detached HEAD，无法推送' } }
+    // 记录真实上游跟踪引用名，推送成功后同步本地跟踪引用（否则面板会多算"传出的更改"）
+    const up = await this.runner.run(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], canonical)
+    const upstreamRef = up.exitCode === 0 ? up.stdout.trim() : ''
     const head = (await this.runner.run(['rev-parse', 'HEAD'], canonical)).stdout.trim()
     const repoPath = `/repos/${parsed.owner}/${parsed.repo}`
     const notes: string[] = []
@@ -535,7 +542,11 @@ export class GitService {
         notes.push(`${sha.slice(0, 7)} → ${apiHead.slice(0, 7)}`)
       }
       await ghApi('PATCH', `${repoPath}/git/refs/heads/${encodeURIComponent(branch)}`, { sha: apiHead, force: false })
-      if (apiHead === head) return { ok: true, output: `API 推送成功（${notes.length} 个提交，sha 与本地完全一致）\n${notes.join('\n')}` }
+      if (apiHead === head) {
+        // sha 与本地一致 → 同步本地跟踪引用，传出计数立即归零
+        if (upstreamRef !== '') await this.runner.run(['update-ref', `refs/remotes/${upstreamRef}`, apiHead], canonical)
+        return { ok: true, output: `API 推送成功（${notes.length} 个提交，sha 与本地完全一致）\n${notes.join('\n')}` }
+      }
       return { ok: true, output: `API 推送完成（${notes.length} 个提交）。注意：GitHub 端归一化使远端 sha 与本地不同（远端 ${apiHead.slice(0, 7)}），网络恢复后建议 git pull --rebase 对齐。\n${notes.join('\n')}` }
     } catch (e) {
       return { ok: false, output: notes.join('\n'), error: { code: 'api-push-failed', message: e instanceof Error ? e.message : String(e) } }
