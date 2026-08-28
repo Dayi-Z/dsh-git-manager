@@ -5,7 +5,9 @@
  * @module gitcompass/host/git-service
  */
 
-import { realpath } from 'node:fs/promises'
+import { realpath, readFile } from 'node:fs/promises'
+import { existsSync, statSync } from 'node:fs'
+import { join, dirname } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import type { BranchesView, BranchRow, GitError, GraphCommit, GraphTips, GraphView, OpResult } from '../core/types.ts'
@@ -25,6 +27,16 @@ const OUTPUT_CAP_BYTES = 1 << 20
 
 export type WorkspaceVerdict = { ok: true; canonical: string } | { ok: false; error: GitError }
 export type WorkspaceGate = (path: string) => Promise<WorkspaceVerdict>
+
+/** 文件级审批行的载荷（additions/deletions 为 null 表示二进制或未跟踪）。 */
+export interface FileReviewRow {
+  path: string
+  additions: number | null
+  deletions: number | null
+  binary?: boolean
+  truncated?: boolean
+  diff: string
+}
 
 /** 基于 `ctx.subprocess` 的生产运行器。 */
 export function subprocessRunner(ctx: Context): GitRunner {
@@ -157,6 +169,7 @@ export class GitService {
 
     await Promise.all(withUpstream.map(async ([row, upstream]) => {
       const count = await this.runner.run(['rev-list', '--left-right', '--count', `${row.name}...${upstream}`], canonical)
+      row.upstream = upstream
       if (count.exitCode !== 0) return
       const [a, b] = count.stdout.trim().split(/\s+/).map(Number)
       row.ahead = Number.isFinite(a) ? a : 0
@@ -164,7 +177,8 @@ export class GitService {
     }))
 
     const sortRows = (rows: BranchRow[]): BranchRow[] => {
-      rows.sort((x, y) => (x.name === current ? -1 : y.name === current ? 1 : x.name.localeCompare(y.name)))
+      const rank = (r: BranchRow): number => (r.name === current ? 0 : /^(main|master|trunk)$/.test(r.name) ? 1 : 2)
+      rows.sort((x, y) => rank(x) - rank(y) || x.name.localeCompare(y.name))
       return rows
     }
 
@@ -216,6 +230,104 @@ export class GitService {
     const run = await this.runner.run(['branch', '-D', branch], canonical)
     if (run.exitCode !== 0) {
       return { ok: false, output: run.stdout, error: { code: 'delete-failed', message: run.stderr.trim() || 'git branch -D failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() }
+  }
+
+  /** 重命名本地分支（git branch -m <from> <to>）。 */
+  async renameBranch(path: string, from: string, to: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const cleanFrom = from.trim()
+    const cleanTo = to.trim()
+    if (cleanFrom === '' || cleanTo === '') {
+      return { ok: false, output: '', error: { code: 'bad-name', message: '分支名不能为空' } }
+    }
+    const run = await this.runner.run(['branch', '-m', cleanFrom, cleanTo], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'rename-failed', message: run.stderr.trim() || 'git branch -m failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() }
+  }
+
+  /** 删除远程分支（git push <remote> --delete <branch>）。 */
+  async deleteRemoteBranch(path: string, branch: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const slash = branch.indexOf('/')
+    if (slash <= 0 || slash === branch.length - 1) {
+      return { ok: false, output: '', error: { code: 'bad-branch', message: `invalid remote branch: ${branch}` } }
+    }
+    const remote = branch.slice(0, slash)
+    const name = branch.slice(slash + 1)
+    const run = await this.runner.run(['push', remote, '--delete', name], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'delete-remote-failed', message: run.stderr.trim() || 'git push --delete failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() }
+  }
+
+  /** 将某分支合并到当前分支（git merge --no-edit <branch>）。 */
+  async mergeBranch(path: string, branch: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const run = await this.runner.run(['merge', '--no-edit', branch], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'merge-failed', message: run.stderr.trim() || 'git merge failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() }
+  }
+
+  /** stash 列表（git stash list）。 */
+  async stashList(path: string): Promise<{ ok: boolean; output: string; error?: GitError }> {
+    const canonical = await this.requireWorkspace(path)
+    const run = await this.runner.run(['stash', 'list'], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: '', error: { code: 'stash-list-failed', message: run.stderr.trim() || 'git stash list failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() }
+  }
+
+  /** 暂存当前变更（git stash push -m [message]）。 */
+  async stashPush(path: string, message?: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const argv = message !== undefined && message.trim() !== ''
+      ? ['stash', 'push', '-m', message.trim()]
+      : ['stash', 'push']
+    const run = await this.runner.run(argv, canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'stash-failed', message: run.stderr.trim() || 'git stash push failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() }
+  }
+
+  /** 弹出最新 stash（git stash pop）。 */
+  async stashPop(path: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const run = await this.runner.run(['stash', 'pop'], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'stash-pop-failed', message: run.stderr.trim() || 'git stash pop failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() }
+  }
+
+  /** cherry-pick 一个提交到当前分支（git cherry-pick <sha>）。 */
+  async cherryPick(path: string, sha: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const clean = sha.trim()
+    if (clean === '') return { ok: false, output: '', error: { code: 'empty-sha', message: 'sha 不能为空' } }
+    const run = await this.runner.run(['cherry-pick', clean], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'cherry-pick-failed', message: run.stderr.trim() || 'git cherry-pick failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() }
+  }
+
+  /** 撤销一个提交（git revert --no-edit <sha>）。 */
+  async revertCommit(path: string, sha: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const clean = sha.trim()
+    if (clean === '') return { ok: false, output: '', error: { code: 'empty-sha', message: 'sha 不能为空' } }
+    const run = await this.runner.run(['revert', '--no-edit', clean], canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'revert-failed', message: run.stderr.trim() || 'git revert failed' } }
     }
     return { ok: true, output: run.stdout.trim() }
   }
@@ -304,6 +416,139 @@ export class GitService {
     return { ok: true, output: run.stdout }
   }
 
+  /**
+   * 待提交变更的评审快照：每个文件的 +增/-删行数、二进制标记与
+   * 截断封顶的 unified diff，供面板文件级审批卡渲染。
+   */
+  async reviewSnapshot(path: string, opts?: { diffCapBytes?: number }): Promise<{ ok: boolean; files?: FileReviewRow[]; error?: GitError }> {
+    const canonical = await this.requireWorkspace(path)
+    const cap = opts?.diffCapBytes ?? 12_000 // per-file unified diff cap
+
+    const numstat = await this.runner.run(['diff', 'HEAD', '--numstat'], canonical)
+    if (numstat.exitCode !== 0) {
+      return { ok: false, error: { code: 'diff-failed', message: numstat.stderr.trim() || 'git diff failed' } }
+    }
+
+    type Entry = { path: string; additions: number | null; deletions: number | null }
+    const entries = new Map<string, Entry>()
+    for (const line of numstat.stdout.split('\n')) {
+      const m = line.match(/^(\d+|-)\t(\d+|-)\t(.+)$/)
+      if (!m) continue
+      const [, a, d, p] = m
+      const file = p.replace(/^"|"$/g, '')
+      entries.set(file, {
+        path: file,
+        additions: a === '-' ? null : Number(a),
+        deletions: d === '-' ? null : Number(d),
+      })
+    }
+
+    // Untracked files: staged-only view would miss them; list with null counts.
+    const untrackedRun = await this.runner.run(['ls-files', '--others', '--exclude-standard'], canonical)
+    if (untrackedRun.exitCode === 0) {
+      for (const line of untrackedRun.stdout.split('\n')) {
+        const file = line.trim()
+        if (file !== '' && !entries.has(file)) entries.set(file, { path: file, additions: null, deletions: null })
+      }
+    }
+
+    const rows: FileReviewRow[] = []
+    let totalBytes = 0
+    const TOTAL_CAP = 128_000
+
+    for (const entry of entries.values()) {
+      const row: FileReviewRow = { ...entry, truncated: false, diff: '' }
+      if (totalBytes < TOTAL_CAP) {
+        const binary = entry.additions === null || entry.deletions === null
+        if (binary) {
+          row.binary = true
+          row.diff = ''
+        } else {
+          const run = await this.runner.run(['diff', 'HEAD', '--', entry.path], canonical)
+          let text = run.exitCode === 0 ? run.stdout : ''
+          const budget = Math.min(cap, TOTAL_CAP - totalBytes)
+          if (text.length > budget) {
+            text = text.slice(0, budget)
+            row.truncated = true
+          }
+          totalBytes += text.length
+          row.diff = text
+        }
+      } else {
+        row.truncated = true
+        row.diff = ''
+      }
+      rows.push(row)
+    }
+
+    // Deterministic order: modified first, then additions, alphabetical.
+    rows.sort((a, b) => a.path.localeCompare(b.path))
+    return { ok: true, files: rows }
+  }
+
+  /**
+   * 全文件对照载荷：左 = HEAD 版本全文，右 = 工作区版本全文，
+   * 并按 -U0 diff 的 hunk 头推算出两侧需要高亮的行号集合。
+   */
+  async reviewFile(path: string, file: string): Promise<{ ok: boolean; value?: {
+    path: string; binary: boolean
+    before: { exists: boolean; text: string }
+    after: { exists: boolean; text: string }
+    delLines: number[]; addLines: number[]
+    truncated: boolean
+  }; error?: GitError }> {
+    const canonical = await this.requireWorkspace(path)
+    const name = file.trim()
+    if (name === '' || name.startsWith('/') || name === '..' || name.includes('/../')) {
+      return { ok: false, error: { code: 'invalid-file', message: 'invalid file path' } }
+    }
+    const CAP = 200_000
+
+    const [showRun] = await Promise.all([
+      this.runner.run(['show', `HEAD:${name}`], canonical),
+      Promise.resolve(null),
+    ])
+    let afterText = ''
+    try {
+      afterText = await readFile(join(canonical, name), 'utf8')
+    } catch { /* new file — empty */ }
+
+    const binaryReplacer = (s: string): boolean => s.includes('\u0000')
+    if (binaryReplacer(showRun.stdout) || binaryReplacer(afterText)) {
+      return { ok: true, value: { path: name, binary: true, before: { exists: showRun.exitCode === 0, text: '' }, after: { exists: true, text: '' }, delLines: [], addLines: [], truncated: false } }
+    }
+
+    const beforeRaw = showRun.exitCode === 0 ? showRun.stdout : ''
+    const truncated = beforeRaw.length > CAP || afterText.length > CAP
+
+    // 行号映射：解析 -U0 unified diff。
+    const delLines: number[] = []
+    const addLines: number[] = []
+    const numstatRun = await this.runner.run(['diff', 'HEAD', '-U0', '--', name], canonical)
+    if (numstatRun.exitCode === 0) {
+      let o = 0; let n = 0
+      for (const raw of numstatRun.stdout.split('\n')) {
+        const m = raw.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/)
+        if (m) { o = Number(m[1]); n = Number(m[3]); continue }
+        if (raw.startsWith('-')) { delLines.push(o); o += 1 }
+        else if (raw.startsWith('+')) { addLines.push(n); n += 1 }
+        else if (raw.startsWith(' ') || raw === '') { o += 1; n += 1 }
+      }
+    }
+
+    return {
+      ok: true,
+      value: {
+        path: name,
+        binary: false,
+        before: { exists: showRun.exitCode === 0, text: beforeRaw.slice(0, CAP) },
+        after: { exists: true, text: afterText.slice(0, CAP) },
+        delLines, addLines,
+        truncated,
+      },
+    }
+  }
+
   async graph(path: string): Promise<GraphView> {
     const canonical = await this.requireWorkspace(path)
     const [repo, current, logRun, tipRun] = await Promise.all([
@@ -342,4 +587,49 @@ export class GitService {
 
     return { repo, current, commits, tips }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Monorepo 子目录的 origin 回溯：
+// 工作区自身是独立 .git（常无 remote）但父目录是 GitHub monorepo 时，
+// 沿父链读最近的仓库配置拿 origin。纯文件读取，不经过 runner 门禁。
+// ---------------------------------------------------------------------------
+
+function originFromConfigText(cfg: string): string | null {
+  const sec = /\[remote\s+"origin"\]([\s\S]*?)(?:\n\[|$)/i.exec(cfg)
+  if (!sec) return null
+  const u = /^\s*url\s*=\s*(.+)$/mi.exec(sec[1])
+  return u ? u[1].trim() : null
+}
+
+async function readRepoOrigin(dir: string): Promise<string | null> {
+  const dotGit = join(dir, '.git')
+  let configPath: string | null = null
+  try {
+    const st = statSync(dotGit)
+    configPath = st.isDirectory() ? join(dotGit, 'config') : null
+    // worktree：.git 是文件，内容为 `gitdir: <path>`。
+    if (st.isFile()) {
+      const gitfile = await readFile(dotGit, 'utf8')
+      const m = /^gitdir:\s*(.+)$/im.exec(gitfile)
+      if (m) configPath = join(m[1].trim(), 'config')
+    }
+  } catch { return null }
+  if (!configPath || !existsSync(configPath)) return null
+  try {
+    return originFromConfigText(await readFile(configPath, 'utf8'))
+  } catch { return null }
+}
+
+/** 沿目录向上找最近一个配置了 origin 的 git 仓库；找不到返回 null。 */
+export async function ancestorOriginUrl(canonical: string): Promise<{ url: string; dir: string } | null> {
+  let dir = canonical
+  for (;;) {
+    const found = await readRepoOrigin(dir)
+    if (found) return { url: found, dir }
+    const parent = dirname(dir)
+    if (parent === dir || parent.length <= 3) break // 到达盘符根
+    dir = parent
+  }
+  return null
 }

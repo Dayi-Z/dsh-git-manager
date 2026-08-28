@@ -1,11 +1,15 @@
 /**
  * gitcompass — GitHub REST wrapper (host side, token never leaves the host).
- * Uses the global fetch against api.github.com with the resolved token.
+ * Layered channel: direct fetch → gh CLI fallback (`gh api`) when the direct
+ * connection fails (Node fetch ignores system proxy; gh applies its own
+ * network config). Every endpoint in PR/Issues/GitHub tabs funnels through
+ * here, so the gh channel covers all of them.
  * @module gitcompass/host/github-service
  */
 
+import { spawn } from 'node:child_process'
 import type { CheckRun, GitHubAuthState, IssueSummary, PullRequestDetail, PullRequestSummary, ReviewComment } from '../core/types.ts'
-import { resolveToken } from './github-auth.ts'
+import { resolveToken, ghToken } from './github-auth.ts'
 
 export class GitHubApiError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -18,14 +22,13 @@ interface GhResult<T> {
   scopes: string[]
 }
 
-async function gh<T>(method: string, path: string, body?: unknown): Promise<GhResult<T>> {
-  const auth = await resolveToken()
-  if (!auth) throw new GitHubApiError('not connected to GitHub — connect in the panel first')
+/** 直连通道：单次 HTTP 尝试。网络级失败抛普通 Error；HTTP 状态错误抛 GitHubApiError。 */
+async function directGh<T>(method: string, path: string, body: unknown, token: string): Promise<GhResult<T>> {
   const res = await fetch(`https://api.github.com${path}`, {
     method,
     headers: {
       accept: 'application/vnd.github+json',
-      authorization: `Bearer ${auth.token}`,
+      authorization: `Bearer ${token}`,
       'user-agent': 'gitcompass-dsh-plugin',
       ...body !== undefined ? { 'content-type': 'application/json' } : {},
     },
@@ -43,6 +46,63 @@ async function gh<T>(method: string, path: string, body?: unknown): Promise<GhRe
   }
   if (res.status === 204) return { json: undefined as T, scopes }
   return { json: (await res.json()) as T, scopes }
+}
+
+/** gh CLI 通道：`gh api` 走 gh 自己的网络/代理配置。仅在网络直连失败时启用。 */
+function cliGh<T>(method: string, path: string, body?: unknown): Promise<GhResult<T>> {
+  return new Promise((resolve, reject) => {
+    const args = ['api', path, '--method', method]
+    const child = spawn('gh', args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (c: string) => { stdout += c })
+    child.stderr.on('data', (c: string) => { stderr += c })
+    child.on('error', () => reject(new Error('gh CLI unavailable for API fallback')))
+    child.on('close', (code) => {
+      if (code === 0) {
+        try { resolve({ json: stdout.trim() === '' ? undefined as T : JSON.parse(stdout) as T, scopes: [] }) }
+        catch (e) { reject(new Error(`gh api parse error: ${String(e instanceof Error ? e.message : e)}`)) }
+        return
+      }
+      // gh 把 HTTP 状态写进 stderr（如 "Not Found (HTTP 404)"）。
+      const m = /\(HTTP (\d{3})\)/.exec(stderr)
+      reject(new GitHubApiError(`GitHub API via gh ${m ? m[1] : 'failed'}: ${stderr.trim().slice(0, 200)}`, m ? Number(m[1]) : undefined))
+    })
+    if (body !== undefined) child.stdin.write(JSON.stringify(body))
+    child.stdin.end()
+  })
+}
+
+/**
+ * 统一入口：候选令牌逐一尝试直连；401/403 换下一个候选；
+ * 纯网络失败 → 整体切到 gh CLI 通道（覆盖 PR / Issues / 认证检查全部端点）。
+ */
+async function gh<T>(method: string, path: string, body?: unknown): Promise<GhResult<T>> {
+  const stored = await resolveToken()
+  const ghTok = await ghToken()
+  const candidates: Array<{ token: string; source: 'stored' | 'gh' }> = []
+  if (stored?.token) candidates.push({ token: stored.token, source: 'stored' })
+  if (ghTok && ghTok !== stored?.token) candidates.push({ token: ghTok, source: 'gh' })
+
+  let networkFailed = false
+  for (const c of candidates) {
+    try {
+      return await directGh<T>(method, path, body, c.token)
+    } catch (e) {
+      if (e instanceof GitHubApiError) {
+        // 该令牌无效：换下一个候选。其他 HTTP 错误（404/422…）是权威响应，直接抛。
+        if ((e.status === 401 || e.status === 403) && c.source === 'stored' && candidates.length > 1) continue
+        throw e
+      }
+      // 网络级失败：不再遍历候选（同一网络环境），切换 CLI 通道。
+      networkFailed = true
+      break
+    }
+  }
+  // 到这里要么网络失败、要么本地完全无令牌——gh 可能已登录，CLI 是唯一通道。
+  return cliGh<T>(method, path, body)
 }
 
 /** 从 origin 远程 URL 解析 GitHub 仓库（owner/repo）。支持 https、ssh、git@。 */
@@ -66,8 +126,13 @@ export async function authState(): Promise<GitHubAuthState> {
   try {
     const { json, scopes } = await gh<{ login: string }>('GET', '/user')
     return { connected: true, login: json.login, scopes, source: auth.source }
-  } catch {
-    return { connected: false, source: 'none' }
+  } catch (error) {
+    // 令牌在握，但要区分「GitHub 拒绝」与「网络不通」——后者不应把用户
+    // 打回登录页形成死循环。
+    if (error instanceof GitHubApiError && error.status !== undefined) {
+      return { connected: false, source: 'none', hasToken: true, invalidToken: true }
+    }
+    return { connected: false, source: 'none', hasToken: true, reachabilityError: String(error instanceof Error ? error.message : error) }
   }
 }
 
@@ -229,4 +294,36 @@ export async function createIssue(owner: string, repo: string, title: string, bo
 
 export async function commentIssue(owner: string, repo: string, number: number, body: string): Promise<void> {
   await gh('POST', `/repos/${owner}/${repo}/issues/${number}/comments`, { body })
+}
+
+/** Issue 详情（正文 + 评论），供 agent issue 读取工具与面板使用。 */
+export async function getIssueDetail(owner: string, repo: string, number: number): Promise<{
+  number: number
+  title: string
+  state: 'open' | 'closed'
+  user: string
+  createdAt: string
+  updatedAt?: string
+  labels: string[]
+  body?: string
+  comments: Array<{ id: number; user: string; body: string; createdAt: string }>
+}> {
+  const issue = await gh<{
+    number: number; title: string; state: string; user: { login: string }; created_at: string; updated_at: string;
+    labels: Array<{ name: string }>; body?: string | null
+  }>('GET', `/repos/${owner}/${repo}/issues/${number}`)
+  const comments = await gh<Array<{ id: number; user: { login: string }; body: string; created_at: string }>>(
+    'GET', `/repos/${owner}/${repo}/issues/${number}/comments?per_page=100`,
+  ).catch(() => ({ json: [], scopes: [] }))
+  return {
+    number: issue.json.number,
+    title: issue.json.title,
+    state: issue.json.state as 'open' | 'closed',
+    user: issue.json.user.login,
+    createdAt: issue.json.created_at,
+    updatedAt: issue.json.updated_at,
+    labels: issue.json.labels.map((l) => l.name),
+    body: issue.json.body ?? undefined,
+    comments: comments.json.map((c) => ({ id: c.id, user: c.user.login, body: c.body, createdAt: c.created_at })),
+  }
 }

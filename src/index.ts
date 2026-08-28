@@ -19,13 +19,18 @@ import type {} from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { GitService, subprocessRunner, type WorkspaceGate } from './host/git-service.ts'
+import { shelfHas } from './host/repo-store.ts'
 import { registerGitcompassRoutes } from './host/routes.ts'
 import { registerTools } from './tools.ts'
+import { EventBus, startRepoObserver } from './host/event-bus.ts'
 
 /** 所需服务：webserver 路由、托管子进程、workspace 注册表、工具注册表。 */
 export const inject = ['webServer', 'subprocess', 'workspaceRegistry', 'tools']
 
-/** 工作区归属门禁：规范化路径并要求它是已注册的 workspace。 */
+/** Event bus singleton — shared between host routes (SSE) and tool wrappers. */
+export const eventBus = new EventBus()
+
+/** 工作区归属门禁：规范化路径并要求它是已注册的 workspace 或插件收录仓库。 */
 function createWorkspaceGate(ctx: Context): WorkspaceGate {
   return async (path) => {
     let canonical: string
@@ -37,6 +42,7 @@ function createWorkspaceGate(ctx: Context): WorkspaceGate {
     if (ctx.workspaceRegistry.list().some((workspace) => workspace.path === canonical)) {
       return { ok: true, canonical }
     }
+    if (shelfHas(canonical)) return { ok: true, canonical }
     return { ok: false, error: { code: 'workspace-unknown', message: 'path is not a registered workspace' } }
   }
 }
@@ -44,8 +50,9 @@ function createWorkspaceGate(ctx: Context): WorkspaceGate {
 export function apply(ctx: Context): void {
   const service = new GitService(subprocessRunner(ctx), createWorkspaceGate(ctx))
 
-  ctx.effect(() => registerGitcompassRoutes(ctx, service), 'gitcompass: /gitu routes')
-  ctx.effect(() => registerTools(ctx, service), 'gitcompass: model tools')
+  ctx.effect(() => registerGitcompassRoutes(ctx, service, eventBus), 'gitcompass: /gitu routes')
+  ctx.effect(() => registerTools(ctx, service, eventBus), 'gitcompass: model tools')
+  ctx.effect(() => startRepoObserver(ctx, eventBus), 'gitcompass: repo observer')
 
   // 引导 agent 优先使用结构化 git/github 工具，而不是裸 bash git。
   ctx.inject(['systemPrompt'], (promptCtx) => {

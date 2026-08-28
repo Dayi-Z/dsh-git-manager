@@ -81,9 +81,19 @@ function ensureStorageDir(): void {
   mkdirSync(STORAGE_DIR, { recursive: true })
 }
 
+const PLAIN_PREFIX = 'plain:'
+
 export async function saveToken(token: string): Promise<void> {
   ensureStorageDir()
-  const cipher = await dpapiProtect(token)
+  let cipher: string
+  try {
+    cipher = await dpapiProtect(token)
+    // DPAPI 空串/异常防御：空结果视为失败走降级。
+    if (cipher.trim() === '') throw new Error('dpapi returned empty payload')
+  } catch {
+    // 环境限制（如受限服务账户）下降级为带前缀的 base64 存储（0600 权限）。
+    cipher = PLAIN_PREFIX + Buffer.from(token, 'utf8').toString('base64')
+  }
   const tmp = TOKEN_FILE + '.tmp'
   writeFileSync(tmp, cipher, 'utf8')
   try { chmodSync(tmp, 0o600) } catch { /* best effort */ }
@@ -93,8 +103,9 @@ export async function saveToken(token: string): Promise<void> {
 export async function readToken(): Promise<string | null> {
   if (!existsSync(TOKEN_FILE)) return null
   try {
-    const cipher = readFileSync(TOKEN_FILE, 'utf8').trim()
-    return await dpapiUnprotect(cipher)
+    const raw = readFileSync(TOKEN_FILE, 'utf8').trim()
+    if (raw.startsWith(PLAIN_PREFIX)) return Buffer.from(raw.slice(PLAIN_PREFIX.length), 'base64').toString('utf8')
+    return await dpapiUnprotect(raw)
   } catch {
     return null
   }

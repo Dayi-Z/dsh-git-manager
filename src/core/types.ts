@@ -30,6 +30,8 @@ export interface BranchRow {
   current: boolean
   ahead?: number
   behind?: number
+  /** 上游分支名（如 origin/main），未设置时为空。 */
+  upstream?: string
   /** PR number open for this branch (when GitHub is connected). */
   prNumber?: number | null
 }
@@ -70,6 +72,11 @@ export interface GitHubAuthState {
   login?: string
   scopes?: string[]
   source: 'stored' | 'gh' | 'none'
+  /** 令牌已保存但 GitHub API 暂不可达（网络/代理问题）。 */
+  hasToken?: boolean
+  reachabilityError?: string
+  /** 令牌存在但被 GitHub 拒绝（401/403），需要重新登录。 */
+  invalidToken?: boolean
 }
 
 /** A GitHub pull request (summary shape). */

@@ -45,9 +45,19 @@ interface PanelClientContext {
 
 export const inject = ['sessions', 'locale']
 
-const PANEL_WIDTH = 360
+const PANEL_DEFAULT_WIDTH = 480
+const PANEL_MIN_WIDTH = 320
+const PANEL_MAX_WIDTH = 760
 
 let frameEl: HTMLElement | null = null
+
+function loadPanelWidth(): number {
+  try {
+    const stored = Number(localStorage.getItem('gc.panelWidth'))
+    if (Number.isFinite(stored) && stored >= PANEL_MIN_WIDTH && stored <= PANEL_MAX_WIDTH) return Math.round(stored)
+  } catch { /* storage may be unavailable */ }
+  return PANEL_DEFAULT_WIDTH
+}
 
 function findFrame(): HTMLElement | null {
   const stamped = document.querySelector<HTMLElement>('[data-dsh-frame]')
@@ -104,23 +114,48 @@ export function apply(ctx: PanelClientContext): void {
       column.style.minWidth = '0'
       column.style.display = 'flex'
       column.style.flexDirection = 'column'
+      column.style.position = 'relative'
       column.style.borderLeft = '1px solid var(--gitcompass-border, rgba(128,128,128,0.25))'
       column.style.overflow = 'auto'
       frame.appendChild(column)
+
+      let panelWidth = loadPanelWidth()
 
       const applyGrid = (): void => {
         const inline = frame.style.gridTemplateColumns
         if (inline === '') return
         const tracks = parseTracks(inline)
         if (tracks.length === 3) {
-          frame.style.gridTemplateColumns = `${tracks.join(' ')} ${PANEL_WIDTH}px`
+          frame.style.gridTemplateColumns = `${tracks.join(' ')} ${panelWidth}px`
         } else if (tracks.length > 3) {
-          frame.style.gridTemplateColumns = `${tracks.slice(0, 3).join(' ')} ${PANEL_WIDTH}px`
+          frame.style.gridTemplateColumns = `${tracks.slice(0, 3).join(' ')} ${panelWidth}px`
         }
       }
       applyGrid()
       const observer = new MutationObserver(() => applyGrid())
       observer.observe(frame, { attributes: true, attributeFilter: ['style'] })
+
+      // 左缘拖拽手柄：调整面板宽度（320–760px），记忆在 localStorage。
+      const grip = document.createElement('div')
+      grip.dataset.gitcompassGrip = ''
+      grip.style.cssText = 'position:absolute;left:-3px;top:0;bottom:0;width:7px;cursor:col-resize;z-index:10;'
+      grip.addEventListener('pointerdown', (e) => {
+        e.preventDefault()
+        const startX = e.clientX
+        const startWidth = panelWidth
+        const onMove = (ev: PointerEvent): void => {
+          panelWidth = Math.round(Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, startWidth - (ev.clientX - startX))))
+          applyGrid()
+        }
+        const onUp = (): void => {
+          document.removeEventListener('pointermove', onMove)
+          document.removeEventListener('pointerup', onUp)
+          try { localStorage.setItem('gc.panelWidth', String(panelWidth)) } catch { /* noop */ }
+        }
+        document.addEventListener('pointermove', onMove)
+        document.addEventListener('pointerup', onUp)
+      })
+      column.appendChild(grip)
 
       const api = new GitcompassApi()
       const host = ctx as unknown as { sessions: PanelClientContext['sessions'] }

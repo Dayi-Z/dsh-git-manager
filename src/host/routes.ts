@@ -1,4 +1,4 @@
-﻿/**
+/**
  * gitcompass — /gitu/* HTTP routes: workspace-bounded git operations plus
  * GitHub auth / PR endpoints. All git ops pass the workspace gate; GitHub ops
  * never expose the token to the client.
@@ -6,18 +6,23 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { access } from 'node:fs/promises'
+import { access, realpath } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { GitError, WorkspaceEntry } from '../core/types.ts'
 import type { GitService } from './git-service.ts'
+import type { EventBus } from './event-bus.ts'
+import { preApprove, panelApprovalBroker, listPreApprovals, revokePreApproval } from './event-bus.ts'
 import {
   clearToken, ghLoggedIn, pollDeviceFlow, readToken, saveToken, startDeviceFlow, syncToGh,
 } from './github-auth.ts'
 import {
-  authState as ghAuthState, commentPR, createPR, findPRForBranch, getPRDetail, listIssues, listPRs,
+  authState as ghAuthState, commentPR, createPR, findPRForBranch, getIssueDetail, getPRDetail, listIssues, listPRs,
   mergePR, prMapByCommit, repoFromUrl, reviewPR, commentIssue, createIssue,
 } from './github-service.ts'
+import { ancestorOriginUrl } from './git-service.ts'
+import { shelfAdd, shelfList, shelfRemove } from './repo-store.ts'
 
 type Envelope<T> = { ok: true; value: T } | { ok: false; error: GitError }
 
@@ -64,22 +69,40 @@ const BAD_REQUEST: GitError = { code: 'bad-request', message: 'malformed request
 const GIT_MARK = '.git'
 
 async function listGitWorkspaces(ctx: Context): Promise<WorkspaceEntry[]> {
-  const entries: WorkspaceEntry[] = []
+  const entries = new Map<string, WorkspaceEntry>()
   for (const workspace of ctx.workspaceRegistry.list()) {
     try {
       await access(join(workspace.path, GIT_MARK))
-      entries.push({ path: workspace.path, title: workspace.title })
+      entries.set(workspace.path, { path: workspace.path, title: workspace.title })
     } catch { /* not a git repo — skip */ }
   }
-  return entries
+  // 插件自持仓库清单：嵌套独立仓库（如 monorepo 内的子仓库）在这里补充。
+  for (const repo of shelfList()) {
+    try {
+      await access(join(repo.path, GIT_MARK))
+      if (!entries.has(repo.path)) {
+        entries.set(repo.path, { path: repo.path, title: repo.title ?? repo.path.split(/[\\/]/).pop() ?? repo.path })
+      }
+    } catch { /* moved/deleted — ignore */ }
+  }
+  return [...entries.values()]
 }
 
-/** 从 workspace 的 origin 解析 GitHub 仓库 + 当前分支的开放 PR。 */
+/** 从 workspace 的 origin 解析 GitHub 仓库 + 当前分支的开放 PR。
+ *  monorepo 子目录（自身 .git 无 remote）时向上回溯父仓库 origin。 */
 async function githubRepoForPath(ctx: Context, service: GitService, path: string): Promise<Envelope<{ owner: string; repo: string; branch: string; prNumber: number | null; connected: boolean; login?: string }>> {
   try {
-    const [origin, branch] = await Promise.all([service.originUrl(path), service.currentBranch(path)])
-    const parsed = repoFromUrl(origin)
-    if (!parsed) return { ok: false, error: { code: 'no-github-remote', message: 'origin 不是 GitHub 仓库' } }
+    const [originRaw, branch] = await Promise.all([service.originUrl(path), service.currentBranch(path)])
+    let parsed = repoFromUrl(originRaw)
+    let origin = originRaw
+    if (!parsed) {
+      const anc = await ancestorOriginUrl(path)
+      if (anc) {
+        parsed = repoFromUrl(anc.url)
+        if (parsed) origin = `${anc.url} (inherited from parent repo ${anc.dir})`
+      }
+    }
+    if (!parsed) return { ok: false, error: { code: 'no-github-remote', message: `origin 未指向 GitHub 仓库：${origin || '(未配置任何 remote)'}` } }
     const state = await ghAuthState()
     let prNumber: number | null = null
     if (state.connected && branch) {
@@ -95,13 +118,34 @@ async function githubRepoForPath(ctx: Context, service: GitService, path: string
 interface Services {
   service: GitService
   ctx: Context
+  eventBus: EventBus
 }
 
 export function route(services: Services) {
-  const { service, ctx } = services
+  const { service, ctx, eventBus } = services
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://dsh')
     const path = url.pathname
+
+    // SSE endpoint: live event stream for the activity monitor
+    if (path === '/gitu/events' && req.method === 'GET') {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+        'access-control-allow-origin': '*',
+      })
+      const send = (event: { id: string; type: string; timestamp: number; data: Record<string, unknown> }): void => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`)
+      }
+      // 发送最近历史
+      for (const event of eventBus.getHistory(100)) send(event)
+      const unsub = eventBus.subscribe('*', send)
+      const ping = setInterval(() => res.write(': ping\n\n'), 25_000)
+      req.on('close', () => { clearInterval(ping); unsub() })
+      return
+    }
+
     if (req.method !== 'POST') { fail(res, { code: 'method', message: 'method not allowed' }, 405); return }
     const payload = await readJsonBody(req)
     const root = field(payload, 'path')
@@ -125,6 +169,25 @@ export function route(services: Services) {
     switch (path) {
       // ---------------- workspaces / git ----------------
       case '/gitu/workspaces': return ok(res, await listGitWorkspaces(ctx))
+      case '/gitu/repos-add': {
+        const p = field(payload, 'path')
+        if (p === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => {
+          let canonical: string
+          try { canonical = await realpath(p) } catch { throw Object.assign(new Error('路径不存在'), { gitError: { code: 'bad-request', message: 'path not found' } }) }
+          if (!existsSync(join(canonical, GIT_MARK))) throw Object.assign(new Error('该目录不是 git 仓库（缺 .git）'), { gitError: { code: 'bad-request', message: 'not a git repo' } })
+          shelfAdd({ path: canonical, title: canonical.split(/[\\/]/).pop() })
+          return await listGitWorkspaces(ctx)
+        })
+      }
+      case '/gitu/repos-remove': {
+        const p = field(payload, 'path')
+        if (p === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => {
+          shelfRemove(await realpath(p).catch(() => p))
+          return await listGitWorkspaces(ctx)
+        })
+      }
       case '/gitu/current': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.current(root))
@@ -225,9 +288,48 @@ export function route(services: Services) {
         const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.diffFile(root, file))
       }
+      // 全文件对照（文件审批标签页）：before/after 全文 + 增删行号集合
+      case '/gitu/review-file': {
+        const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.reviewFile(root, file))
+      }
       case '/gitu/delete': {
         const branch = field(payload, 'branch'); if (root === null || branch === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.deleteBranch(root, branch))
+      }
+      case '/gitu/rename': {
+        const branch = field(payload, 'branch'); const newName = field(payload, 'newName')
+        if (root === null || branch === null || newName === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.renameBranch(root, branch, newName))
+      }
+      case '/gitu/delete-remote': {
+        const branch = field(payload, 'branch'); if (root === null || branch === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.deleteRemoteBranch(root, branch))
+      }
+      case '/gitu/merge': {
+        const branch = field(payload, 'branch'); if (root === null || branch === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.mergeBranch(root, branch))
+      }
+      case '/gitu/stash-list': {
+        if (root === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.stashList(root))
+      }
+      case '/gitu/stash-push': {
+        if (root === null) return fail(res, BAD_REQUEST, 400)
+        const message = field(payload, 'message') ?? undefined
+        return wrap(async () => await service.stashPush(root, message))
+      }
+      case '/gitu/stash-pop': {
+        if (root === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.stashPop(root))
+      }
+      case '/gitu/cherry-pick': {
+        const sha = field(payload, 'sha'); if (root === null || sha === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.cherryPick(root, sha))
+      }
+      case '/gitu/revert': {
+        const sha = field(payload, 'sha'); if (root === null || sha === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.revertCommit(root, sha))
       }
 
       // ---------------- GitHub auth ----------------
@@ -249,17 +351,17 @@ export function route(services: Services) {
           const token = await pollDeviceFlow(deviceCode, interval)
           if (!token) return { pending: true }
           await saveToken(token)
-          await syncToGh(token)
-          const state = await ghAuthState()
-          return { pending: false, ...state }
+          // gh CLI 同步不阻塞登录响应；即使 gh 缺失/失败也不影响面板状态。
+          void syncToGh(token).catch(() => {})
+          return { pending: false }
         })
       }
       case '/gitu/github/token': {
         const token = field(payload, 'token'); if (token === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => {
           await saveToken(token)
-          await syncToGh(token)
-          return await ghAuthState()
+          void syncToGh(token).catch(() => {})
+          return { saved: true }
         })
       }
       case '/gitu/github/logout': return wrap(async () => {
@@ -327,14 +429,86 @@ export function route(services: Services) {
         if (owner === null || repo === null || number === null || body === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => { await commentIssue(owner, repo, number, body); return { commented: true } })
       }
+      case '/gitu/github/issue': {
+        const owner = field(payload, 'owner'); const repo = field(payload, 'repo'); const number = numField(payload, 'number')
+        if (owner === null || repo === null || number === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await getIssueDetail(owner, repo, number))
+      }
+      // Panel → host: pre-approve a tool (skip modal dialog when agent requests it)
+      case '/gitu/preapprove': {
+        const tool = field(payload, 'tool'); const callId = field(payload, 'callId')
+        if (tool === null) return fail(res, BAD_REQUEST, 400)
+        preApprove(tool, callId ?? undefined)
+        return json(res, { ok: true, value: { preApproved: true } })
+      }
+      // Panel → host: list / revoke session pre-approvals (visibility + undo).
+      case '/gitu/preapprove-list':
+        return json(res, { ok: true, value: { tools: listPreApprovals() } })
+      case '/gitu/preapprove-clear': {
+        const tool = field(payload, 'tool')
+        revokePreApproval(tool ?? undefined)
+        return json(res, { ok: true, value: { cleared: true, tools: listPreApprovals() } })
+      }
+      // Panel → host: resolve a LIVE approval request (approve/reject button).
+      case '/gitu/approval': {
+        const callId = field(payload, 'callId'); const decisionRaw = field(payload, 'decision')
+        if (callId === null || (decisionRaw !== 'approved' && decisionRaw !== 'rejected')) return fail(res, BAD_REQUEST, 400)
+        const resolved = panelApprovalBroker.decide(callId, decisionRaw)
+        if (eventBus) {
+          eventBus.emit(decisionRaw === 'approved' ? 'approval:approved' : 'approval:rejected', {
+            tool: field(payload, 'tool') ?? '',
+            callId,
+            summary: `panel ${decisionRaw}`,
+            source: 'panel',
+          })
+        }
+        return json(res, { ok: true, value: { resolved } })
+      }
+      // Demo: emit a fabricated file-review approval card so the UI can be
+      // exercised without a real agent write. Nothing is executed; the card
+      // resolves nothing (broker has no waiter) and is purely cosmetic.
+      case '/gitu/preview-review': {
+        const sampleFiles = [
+          {
+            path: 'src/client/Panel.tsx',
+            additions: 4, deletions: 1,
+            diff: '',
+            beforeFull: { exists: true, text: 'import { t } from \'./i18n.ts\'\n\nconst css = ``\n\nexport function CompassPanel() {\n  return (\n    <div className="gitcompass-panel">\n    </div>\n  )\n}\n' },
+            afterFull: { text: 'import { t } from \'./i18n.ts\'\n\nconst css = `\n.panel-grid{display:grid;grid-template-columns:1fr 1fr}\n.panel-grid .del{background:rgba(248,81,73,.16)}\n.panel-grid .add{background:rgba(46,160,67,.16)}\n`\n\nexport function CompassPanel() {\n  const [tab, setTab] = useState<TabId>(\'changes\')\n  return (\n    <div className="gitcompass-panel">\n    </div>\n  )\n}\n' },
+            delLines: [3],
+            addLines: [3, 4, 5, 6, 9],
+          },
+          {
+            path: 'README.zh.md',
+            additions: 2, deletions: 0,
+            diff: '',
+            beforeFull: { exists: true, text: '# gitcompass\n\n## 功能特性\n\n- 引导式 GitHub Flow 流程条\n\n## 安装\n' },
+            afterFull: { text: '# gitcompass\n\n## 功能特性\n\n- 引导式 GitHub Flow 流程条\n- **Agent 活动监视器**：实时 SSE 事件流\n- **面板内审批**：批准 / 拒绝 / 本会话允许\n\n## 安装\n' },
+            delLines: [],
+            addLines: [5, 6],
+          },
+          {
+            path: 'assets/logo.png',
+            additions: null, deletions: null,
+            binary: true, diff: '',
+          },
+        ]
+        eventBus.emit('approval:requested', {
+          tool: 'git_commit',
+          callId: `preview-${Date.now()}`,
+          summary: 'demo · git commit "Review all staged changes before push" (workspace: D:\\project\\sample)',
+          files: sampleFiles,
+        })
+        return json(res, { ok: true, value: { emitted: true } })
+      }
       default:
         return fail(res, { code: 'unknown', message: `unknown route ${path}` }, 404)
     }
   }
 }
 
-export function registerGitcompassRoutes(ctx: Context, service: GitService): () => void {
-  return ctx.webServer.register({ kind: 'prefix', path: '/gitu', handler: route({ service, ctx }) })
+export function registerGitcompassRoutes(ctx: Context, service: GitService, eventBus: EventBus): () => void {
+  return ctx.webServer.register({ kind: 'prefix', path: '/gitu', handler: route({ service, ctx, eventBus }) })
 }
 
 // Re-exported for tests/tools.
