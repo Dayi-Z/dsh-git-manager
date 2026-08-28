@@ -1394,9 +1394,9 @@ function AgentView({ api, events }: { api: GitcompassApi; events: GitEvent[] }):
   }, [events, cleared])
 
   // 会话预批准（始终允许）的服务端真实状态：常驻芯片展示，可随时 ✕ 撤销。
-  // 注意 api.preApproveList 已拆信封：返回值就是 {tools} 本体（此前误读 r.value 静默崩坏，芯片从未渲染）。
+  // preApproveList 返回完整信封 {ok,value:{tools}}——value 才是载荷；+15s 轮询保持真值。
   const refreshPre = useCallback(() => {
-    void api.preApproveList().then((r) => setPreAllowed(Array.isArray(r?.tools) ? r.tools : [])).catch(() => {})
+    void api.preApproveList().then((r) => setPreAllowed(Array.isArray(r.value?.tools) ? r.value.tools : [])).catch(() => {})
   }, [api])
   useEffect(() => { refreshPre() }, [refreshPre])
   useEffect(() => {
