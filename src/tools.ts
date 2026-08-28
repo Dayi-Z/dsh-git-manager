@@ -78,8 +78,15 @@ async function requireApproval(ctx: Context, exec: ToolExec, reason: string, eve
     | { request(opts: { agent?: unknown; toolName: string; callId?: string; reason?: string; signal?: AbortSignal }): Promise<string> }
     | undefined
 
-  // ④ Race: panel decision vs. modal dialog. First settlement wins.
-  // 面板窗口放宽到 5 分钟：跨会话审批卡需要充足的浏览/评审时间。
+  // ④ Race: panel decision vs. modal dialog — PANEL-AUTHORITATIVE semantics:
+  //   - panel settles first → its decision rules;
+  //   - modal 'allowed-once' (human approved the native dialog) → allow instantly;
+  //   - modal ANY other outcome — 'rejected' (which DSH also returns when the
+  //     session approval policy is 'never'/prompts disabled, so a ghost deny is
+  //     indistinguishable from a human deny), 'cancelled', 'unavailable', or
+  //     channel error — CANNOT veto: the panel card is this plugin's purpose-
+  //     built gate. Wait for the panel decision or its 5-min timeout (null →
+  //     reject, fail closed). The native dialog can only accelerate approval.
   type Winner = { src: 'panel'; decision: 'approved' | 'rejected' | null } | { src: 'modal'; outcome: string | null }
   const panelPromise = panelApprovalBroker.wait(callId, 300_000).then(
     (d): Winner => ({ src: 'panel', decision: d }),
@@ -94,7 +101,15 @@ async function requireApproval(ctx: Context, exec: ToolExec, reason: string, eve
       }).then((o): Winner => ({ src: 'modal', outcome: o })).catch((): Winner => ({ src: 'modal', outcome: null }))
     : new Promise<Winner>(() => { /* no modal channel — panel only */ })
 
-  const winner = await Promise.race([panelPromise, modalPromise])
+  const first = await Promise.race([panelPromise, modalPromise])
+  let winner: Winner
+  if (first.src === 'panel') {
+    winner = first
+  } else if (first.outcome === 'allowed-once') {
+    winner = first
+  } else {
+    winner = await panelPromise
+  }
 
   let allowed = false
   let source = 'modal'
