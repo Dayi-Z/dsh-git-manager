@@ -594,7 +594,7 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
       {(tags ?? []).length === 0 ? <div className="gc-muted" style={{ padding: '2px 4px' }}>{t('tags.none')}</div> : null}
       {(tags ?? []).map((tag) => (
         <div key={tag.name} className="gc-row" style={{ padding: '1px 2px' }}>
-          <span className="sha" style={{ color: 'var(--gc-amber)' }}><Icon name="tag" size={11} /></span>
+          <span style={{ color: 'var(--gc-amber)', display: 'inline-flex', flex: 'none' }}><Icon name="tag" size={11} /></span>
           <span className="sub" title={tag.name}>{tag.name}</span>
           <span style={{ flex: 1 }} />
           {tag.date ? <span className="gc-muted" style={{ fontSize: 10 }}>{tag.date}</span> : null}
