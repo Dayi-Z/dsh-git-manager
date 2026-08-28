@@ -285,8 +285,8 @@ body[data-ds-dark-theme] .gitcompass-panel{
 // 设置：轮询速度（localStorage 持久化；usePoll 读取缩放系数）
 // ---------------------------------------------------------------------------
 
-/** 构建标识：设置菜单页脚显示，一眼诊断浏览器端缓存滞后。 */
-const GC_VERSION = '1.6.2'
+/** 构建标识：设置菜单页脚显示，一眼诊断浏览器端缓存滞后（与 package.json version 同步）。 */
+const GC_VERSION = '1.6.3'
 
 type PollSpeed = 'fast' | 'std' | 'slow'
 const POLL_SCALE: Record<PollSpeed, number> = { fast: 0.5, std: 1, slow: 2 }
