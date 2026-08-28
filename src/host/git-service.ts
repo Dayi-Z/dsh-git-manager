@@ -10,6 +10,7 @@ import { existsSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import { ghApi, repoFromUrl } from './github-service.ts'
 import type { BranchesView, BranchRow, GitError, GraphCommit, GraphTips, GraphView, OpResult } from '../core/types.ts'
 
 export interface GitRunResult {
@@ -471,6 +472,83 @@ export class GitService {
     const run = await this.runner.run(['diff-tree', '--no-commit-id', '-r', '--root', '-p', ref, '--', name], canonical)
     if (run.exitCode !== 0) throw { code: 'commit-patch-failed', message: run.stderr.trim() || 'git diff-tree failed' } as GitError
     return { patch: run.stdout }
+  }
+
+  /** gh/API 通道推送：github.com:443 直连不可用时的恢复路径。
+   * 逐提交在 GitHub 端重建（blob→tree→commit），完整保留作者/提交者与时间戳；
+   * 完成后把分支引用快进到重建链顶端。sha 与本地一致时无缝对齐；
+   * 因 GitHub 端归一化导致不一致时会在输出中如实说明。 */
+  async apiPush(path: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const origin = await this.originUrl(path)
+    const parsed = repoFromUrl(origin)
+    if (!parsed) return { ok: false, output: '', error: { code: 'not-github', message: 'origin 不是 GitHub 仓库，API 推送仅支持 GitHub 远端' } }
+    const branch = (await this.runner.run(['rev-parse', '--abbrev-ref', 'HEAD'], canonical)).stdout.trim()
+    if (!branch || branch === 'HEAD') return { ok: false, output: '', error: { code: 'detached-head', message: '当前处于 detached HEAD，无法推送' } }
+    const head = (await this.runner.run(['rev-parse', 'HEAD'], canonical)).stdout.trim()
+    const repoPath = `/repos/${parsed.owner}/${parsed.repo}`
+    const notes: string[] = []
+    try {
+      const ref = await ghApi<{ object: { sha: string } }>('GET', `${repoPath}/git/ref/heads/${encodeURIComponent(branch)}`)
+      let apiHead = ref.object.sha
+      if (apiHead === head) return { ok: true, output: '远端已与本地一致（up to date）' }
+      let apiTree = (await ghApi<{ tree: { sha: string } }>('GET', `${repoPath}/git/commits/${apiHead}`)).tree.sha
+      // 待推提交（旧→新），完整元数据逐字段保留
+      const log = await this.runner.run(['log', '--reverse', `--format=%H${REC}%an${FIELD}%ae${FIELD}%aI${FIELD}%cn${FIELD}%ce${FIELD}%cI${FIELD}%B${REC}`, `${apiHead}..HEAD`], canonical)
+      if (log.exitCode !== 0) return { ok: false, output: '', error: { code: 'log-failed', message: log.stderr.trim() || 'git log failed' } }
+      const records = log.stdout.split(REC).filter((s) => s.trim() !== '')
+      if (records.length === 0) return { ok: false, output: '', error: { code: 'diverged', message: '远端包含本地没有的提交（分叉），快进式 API 推送不适用' } }
+      for (const rec of records) {
+        const f = rec.split(FIELD)
+        const sha = f[0]
+        const message = f.slice(7).join(FIELD)
+        const parents = (await this.runner.run(['rev-list', '--parents', '-n', '1', sha], canonical)).stdout.trim().split(/\s+/)
+        if (parents.length > 2) return { ok: false, output: notes.join('\n'), error: { code: 'merge-unsupported', message: `提交 ${sha.slice(0, 7)} 是合并提交，API 通道暂不支持` } }
+        const dt = await this.runner.run(['diff-tree', '--no-commit-id', '--name-status', '-r', sha], canonical)
+        if (dt.exitCode !== 0) return { ok: false, output: notes.join('\n'), error: { code: 'difftree-failed', message: dt.stderr.trim() || 'git diff-tree failed' } }
+        const entries: Array<{ path: string; mode: string; sha: string | null }> = []
+        for (const line of dt.stdout.split('\n').filter((l) => l.trim() !== '')) {
+          const parts = line.split('\t')
+          const st = parts[0]
+          if (st === 'D') {
+            entries.push({ path: parts[1], mode: '100644', sha: null })
+          } else if (st.startsWith('R') || st.startsWith('C')) {
+            entries.push({ path: parts[1], mode: '100644', sha: null })
+            entries.push(await this.apiBlobEntry(repoPath, canonical, sha, parts[2]))
+          } else {
+            entries.push(await this.apiBlobEntry(repoPath, canonical, sha, parts[1]))
+          }
+        }
+        const tree = await ghApi<{ sha: string }>('POST', `${repoPath}/git/trees`, { base_tree: apiTree, tree: entries })
+        const commit = await ghApi<{ sha: string; tree: { sha: string } }>('POST', `${repoPath}/git/commits`, {
+          message,
+          tree: tree.sha,
+          parents: [apiHead],
+          author: { name: f[1], email: f[2], date: f[3] },
+          committer: { name: f[4], email: f[5], date: f[6] },
+        })
+        apiHead = commit.sha
+        apiTree = commit.tree.sha
+        notes.push(`${sha.slice(0, 7)} → ${apiHead.slice(0, 7)}`)
+      }
+      await ghApi('PATCH', `${repoPath}/git/refs/heads/${encodeURIComponent(branch)}`, { sha: apiHead, force: false })
+      if (apiHead === head) return { ok: true, output: `API 推送成功（${notes.length} 个提交，sha 与本地完全一致）\n${notes.join('\n')}` }
+      return { ok: true, output: `API 推送完成（${notes.length} 个提交）。注意：GitHub 端归一化使远端 sha 与本地不同（远端 ${apiHead.slice(0, 7)}），网络恢复后建议 git pull --rebase 对齐。\n${notes.join('\n')}` }
+    } catch (e) {
+      return { ok: false, output: notes.join('\n'), error: { code: 'api-push-failed', message: e instanceof Error ? e.message : String(e) } }
+    }
+  }
+
+  /** 单文件 → GitHub blob → tree 条目。文本内容经 UTF-8 无损回编码；含 NUL 的二进制不支持。 */
+  private async apiBlobEntry(repoPath: string, canonical: string, sha: string, file: string): Promise<{ path: string; mode: string; sha: string | null }> {
+    const ls = await this.runner.run(['ls-tree', sha, '--', file], canonical)
+    const m = /^(\d+) blob [0-9a-f]+\t/.exec(ls.stdout)
+    const mode = m ? m[1] : '100644'
+    const cat = await this.runner.run(['cat-file', 'blob', `${sha}:${file}`], canonical)
+    if (cat.exitCode !== 0) throw new Error(`git cat-file 失败：${file}`)
+    if (cat.stdout.includes('\u0000')) throw new Error(`二进制文件暂不支持 API 通道：${file}`)
+    const blob = await ghApi<{ sha: string }>('POST', `${repoPath}/git/blobs`, { content: Buffer.from(cat.stdout, 'utf8').toString('base64'), encoding: 'base64' })
+    return { path: file, mode, sha: blob.sha }
   }
 
   /**

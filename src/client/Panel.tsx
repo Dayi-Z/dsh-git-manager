@@ -655,9 +655,14 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
               <span className="sub" title={c.subject}>{c.subject}</span>
             </div>
           ))}
-          <button className="gc-btn primary" style={{ marginTop: 4 }} disabled={busy !== null} onClick={() => act('push', () => api.push(path))}>
-            {t('changes.push')} ↑{outCommits.length}
-          </button>
+          <div className="gc-row" style={{ marginTop: 4 }}>
+            <button className="gc-btn primary" disabled={busy !== null} onClick={() => act('push', () => api.push(path))}>
+              {t('changes.push')} ↑{outCommits.length}
+            </button>
+            <button className="gc-btn" disabled={busy !== null} title={t('changes.pushApiHint')} onClick={() => act('apipush', () => api.apiPush(path))}>
+              {t('changes.pushApi')}
+            </button>
+          </div>
         </div>
       ) : null}
     </div>

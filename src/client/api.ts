@@ -189,4 +189,8 @@ export class GitcompassApi {
   commitPatch(path: string, sha: string, file: string): Promise<{ patch: string }> {
     return call('/gitu/commit-patch', { path, sha, file })
   }
+  /** gh/API 通道推送：github.com 直连不可用时的恢复路径（逐提交在 GitHub 端重建）。 */
+  apiPush(path: string): Promise<OpResult> {
+    return call('/gitu/api-push', { path })
+  }
 }

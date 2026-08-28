@@ -322,6 +322,10 @@ export function route(services: Services) {
         if (root === null || sha === null || file === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.commitPatch(root, sha, file))
       }
+      // gh/API 通道推送：github.com 直连不可用时的恢复路径（逐提交在 GitHub 端重建）。
+      case '/gitu/api-push':
+        if (root === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.apiPush(root))
       case '/gitu/rename': {
         const branch = field(payload, 'branch'); const newName = field(payload, 'newName')
         if (root === null || branch === null || newName === null) return fail(res, BAD_REQUEST, 400)

@@ -105,6 +105,11 @@ async function gh<T>(method: string, path: string, body?: unknown): Promise<GhRe
   return cliGh<T>(method, path, body)
 }
 
+/** 统一 gh 通道的裸导出：直连优先、网络失败自动降级 `gh api`。 */
+export async function ghApi<T>(method: string, path: string, body?: unknown): Promise<T> {
+  return (await gh<T>(method, path, body)).json
+}
+
 /** 从 origin 远程 URL 解析 GitHub 仓库（owner/repo）。支持 https、ssh、git@。 */
 export function repoFromUrl(url: string): { owner: string; repo: string } | null {
   let m = /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(url)
