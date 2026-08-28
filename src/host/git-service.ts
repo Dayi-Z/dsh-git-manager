@@ -369,11 +369,12 @@ export class GitService {
 
   async stageFile(path: string, file: string): Promise<OpResult> {
     const canonical = await this.requireWorkspace(path)
-    const clean = file.trim()
-    if (clean === '' || clean.startsWith('/') || clean === '..' || clean.includes('/../')) {
+    // 重命名条目形如 "old -> new"：展开为多个 pathspec。
+    const parts = file.trim().includes(' -> ') ? file.trim().split(' -> ').map((s) => s.trim()) : [file.trim()]
+    if (parts.some((p) => p === '' || p.startsWith('/') || p === '..' || p.includes('/../'))) {
       return { ok: false, output: '', error: { code: 'invalid-file', message: 'invalid file path' } }
     }
-    const run = await this.runner.run(['add', '--', clean], canonical)
+    const run = await this.runner.run(['add', '--', ...parts], canonical)
     if (run.exitCode !== 0) {
       return { ok: false, output: run.stdout, error: { code: 'add-failed', message: run.stderr.trim() || 'git add failed' } }
     }
@@ -382,11 +383,11 @@ export class GitService {
 
   async unstageFile(path: string, file: string): Promise<OpResult> {
     const canonical = await this.requireWorkspace(path)
-    const clean = file.trim()
-    if (clean === '' || clean.startsWith('/') || clean === '..' || clean.includes('/../')) {
+    const parts = file.trim().includes(' -> ') ? file.trim().split(' -> ').map((s) => s.trim()) : [file.trim()]
+    if (parts.some((p) => p === '' || p.startsWith('/') || p === '..' || p.includes('/../'))) {
       return { ok: false, output: '', error: { code: 'invalid-file', message: 'invalid file path' } }
     }
-    const run = await this.runner.run(['reset', 'HEAD', '--', clean], canonical)
+    const run = await this.runner.run(['reset', 'HEAD', '--', ...parts], canonical)
     if (run.exitCode !== 0) {
       return { ok: false, output: run.stdout, error: { code: 'reset-failed', message: run.stderr.trim() || 'git reset failed' } }
     }
@@ -414,6 +415,62 @@ export class GitService {
       return { ok: false, output: '', error: { code: 'diff-failed', message: run.stderr.trim() || 'git diff failed' } }
     }
     return { ok: true, output: run.stdout }
+  }
+
+  /** 上游存在但未推送的提交（@{u}..HEAD）；无上游或无提交时为空数组。 */
+  async outgoing(path: string): Promise<{ commits: Array<{ sha: string; subject: string }> }> {
+    const canonical = await this.requireWorkspace(path)
+    const run = await this.runner.run(['log', '@{u}..HEAD', '--format=%h%x1f%s'], canonical)
+    if (run.exitCode !== 0) return { commits: [] }
+    const commits = run.stdout.split('\n').filter((l) => l.trim() !== '').map((l) => {
+      const i = l.indexOf(REC)
+      return i === -1 ? { sha: l.trim(), subject: '' } : { sha: l.slice(0, i).trim(), subject: l.slice(i + 1).trim() }
+    })
+    return { commits }
+  }
+
+  /** 丢弃一个文件的本地更改：已跟踪 → checkout --；未跟踪 → clean -f --。 */
+  async discardFile(path: string, file: string): Promise<OpResult> {
+    const canonical = await this.requireWorkspace(path)
+    const parts = file.trim().includes(' -> ') ? file.trim().split(' -> ').map((s) => s.trim()) : [file.trim()]
+    if (parts.some((p) => p === '' || p.startsWith('/') || p === '..' || p.includes('/../'))) {
+      return { ok: false, output: '', error: { code: 'invalid-file', message: 'invalid file path' } }
+    }
+    const st = await this.runner.run(['status', '--porcelain', '--', ...parts], canonical)
+    const untracked = st.stdout.startsWith('??')
+    const argv = untracked ? ['clean', '-f', '--', ...parts] : ['checkout', '--', ...parts]
+    const run = await this.runner.run(argv, canonical)
+    if (run.exitCode !== 0) {
+      return { ok: false, output: run.stdout, error: { code: 'discard-failed', message: run.stderr.trim() || 'git discard failed' } }
+    }
+    return { ok: true, output: run.stdout.trim() }
+  }
+
+  /** 某个提交的变更文件清单（numstat；二进制文件增删为 null）。 */
+  async commitFiles(path: string, sha: string): Promise<{ files: Array<{ path: string; additions: number | null; deletions: number | null }> }> {
+    const canonical = await this.requireWorkspace(path)
+    const ref = sha.trim()
+    if (!/^[0-9a-fA-F]{4,40}$/.test(ref)) throw { code: 'invalid-sha', message: 'invalid commit sha' } as GitError
+    const run = await this.runner.run(['diff-tree', '--no-commit-id', '--numstat', '-r', '--root', ref], canonical)
+    if (run.exitCode !== 0) throw { code: 'commit-files-failed', message: run.stderr.trim() || 'git diff-tree failed' } as GitError
+    const files = run.stdout.split('\n').filter((l) => l.trim() !== '').map((l) => {
+      const [a, d, ...rest] = l.split('\t')
+      return { path: rest.join('\t'), additions: a === '-' ? null : Number(a), deletions: d === '-' ? null : Number(d) }
+    }).filter((f) => f.path !== '')
+    return { files }
+  }
+
+  /** 某个提交中单个文件的补丁文本。 */
+  async commitPatch(path: string, sha: string, file: string): Promise<{ patch: string }> {
+    const canonical = await this.requireWorkspace(path)
+    const ref = sha.trim()
+    const name = file.trim()
+    if (!/^[0-9a-fA-F]{4,40}$/.test(ref) || name === '' || name.startsWith('/') || name === '..' || name.includes('/../')) {
+      throw { code: 'invalid-args', message: 'invalid commit patch args' } as GitError
+    }
+    const run = await this.runner.run(['diff-tree', '--no-commit-id', '-r', '--root', '-p', ref, '--', name], canonical)
+    if (run.exitCode !== 0) throw { code: 'commit-patch-failed', message: run.stderr.trim() || 'git diff-tree failed' } as GitError
+    return { patch: run.stdout }
   }
 
   /**

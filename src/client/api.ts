@@ -173,4 +173,20 @@ export class GitcompassApi {
   }> {
     return call('/gitu/review-file', { path, file })
   }
+  /** 传出的更改：@{u}..HEAD 未推送提交（无上游 → 空数组）。 */
+  outgoing(path: string): Promise<{ commits: Array<{ sha: string; subject: string }> }> {
+    return call('/gitu/outgoing', { path })
+  }
+  /** 丢弃单文件本地更改（未跟踪 = 删除文件）。 */
+  discard(path: string, file: string): Promise<OpResult> {
+    return call('/gitu/discard', { path, file })
+  }
+  /** 图谱下钻：单个提交的变更文件清单（二进制增删为 null）。 */
+  commitFiles(path: string, sha: string): Promise<{ files: Array<{ path: string; additions: number | null; deletions: number | null }> }> {
+    return call('/gitu/commit-files', { path, sha })
+  }
+  /** 图谱下钻：单个提交中单文件的补丁。 */
+  commitPatch(path: string, sha: string, file: string): Promise<{ patch: string }> {
+    return call('/gitu/commit-patch', { path, sha, file })
+  }
 }

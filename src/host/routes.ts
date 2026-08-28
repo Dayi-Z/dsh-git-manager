@@ -289,13 +289,38 @@ export function route(services: Services) {
         return wrap(async () => await service.diffFile(root, file))
       }
       // 全文件对照（文件审批标签页）：before/after 全文 + 增删行号集合
+      // 注意：service.reviewFile 自带一层 {ok,value} 信封——这里必须解包，
+      // 否则客户端拿到双重信封，把内层信封当 ComparePayload 渲染直接崩溃。
       case '/gitu/review-file': {
         const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
-        return wrap(async () => await service.reviewFile(root, file))
+        return wrap(async () => {
+          const r = await service.reviewFile(root, file)
+          if (!r.ok || r.value === undefined) throw { code: 'review-failed', message: 'review-file failed' } as GitError
+          return r.value
+        })
       }
       case '/gitu/delete': {
         const branch = field(payload, 'branch'); if (root === null || branch === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.deleteBranch(root, branch))
+      }
+      // 传出的更改：@{u}..HEAD 的提交列表（无上游 → 空数组）。
+      case '/gitu/outgoing':
+        if (root === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.outgoing(root))
+      // 丢弃单文件本地更改（已跟踪 checkout --；未跟踪 clean -f --）。
+      case '/gitu/discard': {
+        const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.discardFile(root, file))
+      }
+      // 图谱下钻：单个提交的变更文件清单 / 单文件补丁。
+      case '/gitu/commit-files': {
+        const sha = field(payload, 'sha'); if (root === null || sha === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.commitFiles(root, sha))
+      }
+      case '/gitu/commit-patch': {
+        const sha = field(payload, 'sha'); const file = field(payload, 'file')
+        if (root === null || sha === null || file === null) return fail(res, BAD_REQUEST, 400)
+        return wrap(async () => await service.commitPatch(root, sha, file))
       }
       case '/gitu/rename': {
         const branch = field(payload, 'branch'); const newName = field(payload, 'newName')

@@ -6,7 +6,7 @@
  * @module gitcompass/client/Panel
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Component, Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   GitcompassApi,
   type BranchesView,
@@ -115,6 +115,21 @@ body[data-ds-dark-theme] .gitcompass-panel{
 .gc-issue{border:1px solid var(--gc-border);border-radius:8px;padding:7px 8px;margin-bottom:6px;cursor:pointer;transition:border-color .12s,box-shadow .12s}
 .gc-issue:hover{border-color:var(--gc-accent);box-shadow:var(--gc-shadow)}
 .gc-diff{font-family:var(--gc-mono);font-size:11px;padding:4px 8px;background:var(--gc-bg-soft);border-radius:6px;margin:4px 0;overflow:auto;max-height:300px;white-space:pre}
+/* Trae 式变更页 */
+.gc-commitbox{display:flex;gap:6px;margin-bottom:8px}
+.gc-commitbox .gc-input{flex:1;min-width:0}
+.gc-path{opacity:.45;font-size:10px;font-family:var(--gc-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px}
+.gc-st{flex:none;font-family:var(--gc-mono);font-size:10px;font-weight:700;line-height:1;padding:3px 5px;border-radius:4px;border:1px solid var(--gc-border);opacity:.75;min-width:18px;text-align:center}
+.gc-st.add{color:var(--gc-accent);border-color:var(--gc-accent)}
+.gc-st.mod{color:var(--gc-amber);border-color:var(--gc-amber)}
+.gc-st.del{color:var(--gc-red);border-color:var(--gc-red)}
+.gc-st.ren{color:var(--gc-info);border-color:var(--gc-info)}
+.gc-folder{display:flex;gap:5px;align-items:center;padding:2px 4px;border-radius:5px;cursor:pointer;font-family:var(--gc-mono);font-size:11px}
+.gc-folder:hover{background:var(--gc-bg-soft)}
+.gc-caret{opacity:.5;font-size:9px;width:10px;flex:none}
+.gc-numstat{font-family:var(--gc-mono);font-size:10px;color:var(--gc-accent);opacity:.85}
+.gc-numstat.del{color:var(--gc-red)}
+.gc-drill .gc-file{font-size:11px}
 .gc-review-btns{display:flex;gap:4px;margin-top:6px}
 .gc-section{margin-top:12px}
 .gc-section .head{font-weight:600;margin-bottom:5px;opacity:.55;font-size:10px;text-transform:uppercase;letter-spacing:.06em}
@@ -450,13 +465,85 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
 // Changes tab
 // ---------------------------------------------------------------------------
 
-function Changes({ api, path }: { api: GitcompassApi; path: string }): JSX.Element {
+// ---------------------------------------------------------------------------
+// Changes tab — Trae 式源代码管理：提交框置顶 / 状态字母 / 树视图 / 传出的更改
+// ---------------------------------------------------------------------------
+
+type StatusRow = { file: string; x: string; y: string; untracked: boolean; newPath: string }
+
+type DirNode = { name: string; path: string; dirs: Map<string, DirNode>; files: Array<{ name: string; row: StatusRow }> }
+
+function buildFileTree(rows: StatusRow[]): DirNode {
+  const root: DirNode = { name: '', path: '', dirs: new Map(), files: [] }
+  for (const row of rows) {
+    const parts = row.newPath.split('/')
+    let node = root
+    for (let i = 0; i < parts.length - 1; i++) {
+      const seg = parts[i]
+      let child = node.dirs.get(seg)
+      if (!child) {
+        child = { name: seg, path: parts.slice(0, i + 1).join('/'), dirs: new Map(), files: [] }
+        node.dirs.set(seg, child)
+      }
+      node = child
+    }
+    node.files.push({ name: parts[parts.length - 1], row })
+  }
+  return root
+}
+
+function stLetter(row: StatusRow, group: 'staged' | 'changes'): string {
+  if (row.untracked) return 'U'
+  const code = group === 'staged' ? row.x : row.y
+  return code === ' ' ? 'M' : code === '?' ? 'U' : code
+}
+
+function stClass(letter: string): string {
+  switch (letter) {
+    case 'A': case 'C': return 'gc-st add'
+    case 'M': case 'T': return 'gc-st mod'
+    case 'D': return 'gc-st del'
+    case 'R': return 'gc-st ren'
+    default: return 'gc-st'
+  }
+}
+
+function ChangeRowTree(props: {
+  node: DirNode; depth: number; expanded: Set<string>; toggle: (p: string) => void
+  renderFile: (row: StatusRow) => JSX.Element
+}): JSX.Element {
+  const { node, depth, expanded, toggle, renderFile } = props
+  return (
+    <>
+      {[...node.dirs.values()].map((d) => {
+        const open = expanded.has(d.path)
+        const count = (() => { let n = d.files.length; for (const v of d.dirs.values()) n += 1; return n })()
+        return (
+          <div key={d.path}>
+            <div className="gc-folder" style={{ paddingLeft: 4 + depth * 14 }} onClick={() => toggle(d.path)}>
+              <span className="gc-caret">{open ? '▾' : '▸'}</span>
+              <span>{d.name}</span>
+              <span className="gc-muted" style={{ fontSize: 10 }}>{count}</span>
+            </div>
+            {open ? <ChangeRowTree node={d} depth={depth + 1} expanded={expanded} toggle={toggle} renderFile={renderFile} /> : null}
+          </div>
+        )
+      })}
+      {node.files.map((f) => <div key={f.row.file} style={{ paddingLeft: 4 + depth * 14 }}>{renderFile(f.row)}</div>)}
+    </>
+  )
+}
+
+function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: { ahead?: number } | null }): JSX.Element {
   const { data, error, reload } = usePoll(() => api.status(path), [path], 4000)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [diffFile, setDiffFile] = useState<string | null>(null)
   const [diffData, setDiffData] = useState<string>('')
   const [diffLoading, setDiffLoading] = useState(false)
+  const [treeView, setTreeView] = useState(false)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const { data: outgoing } = usePoll(() => api.outgoing(path), [path], 10000)
 
   const act = async (kind: string, fn: () => Promise<unknown>): Promise<void> => {
     setBusy(kind)
@@ -472,67 +559,105 @@ function Changes({ api, path }: { api: GitcompassApi; path: string }): JSX.Eleme
     } catch { setDiffData('(diff error)') } finally { setDiffLoading(false) }
   }
 
-  const lines = useMemo(() => (data?.output ?? '').split('\n').filter(Boolean), [data])
-  const grouped = useMemo(() => {
-    const g: Record<string, string[]> = { staged: [], untracked: [], unstaged: [] }
-    for (const line of lines) {
-      const code = line.slice(0, 2)
-      const file = line.slice(3)
-      if (code === '??') g.untracked.push(file)
-      else if (code === 'A ') g.staged.push(file)
-      else if (code === 'D ') g.staged.push(file)
-      else g.unstaged.push(file)
-    }
-    return g
-  }, [lines])
+  const toggleDir = (p: string): void => setExpanded((prev) => { const n = new Set(prev); if (n.has(p)) n.delete(p); else n.add(p); return n })
+
+  const lines = useMemo(() => (data?.output ?? '').split('\n').filter((l) => l.trim() !== ''), [data])
+  const rows = useMemo<StatusRow[]>(() => lines.map((l) => {
+    const code = l.slice(0, 2)
+    const file = l.slice(3)
+    const i = file.indexOf(' -> ')
+    return { file, x: code[0] ?? ' ', y: code[1] ?? ' ', untracked: code === '??', newPath: i === -1 ? file : file.slice(i + 4) }
+  }), [lines])
+  // 分组遵循 Trae：已暂存 / 更改（未暂存 + 未跟踪合并；未跟踪状态字母显示 U）
+  const staged = useMemo(() => rows.filter((r) => !r.untracked && r.x !== ' ' && r.x !== '?'), [rows])
+  const changes = useMemo(() => rows.filter((r) => r.untracked || (r.y !== ' ' && r.y !== '?')), [rows])
+  const groups: Array<{ key: string; label: string; rows: StatusRow[]; kind: 'staged' | 'changes' }> = [
+    { key: 'staged', label: t('changes.staged'), rows: staged, kind: 'staged' },
+    { key: 'changes', label: t('changes.changesGroup'), rows: changes, kind: 'changes' },
+  ]
+  // 树构建必须在顶层（hooks 不能出现在条件渲染/循环里）
+  const stagedTree = useMemo(() => buildFileTree(staged), [staged])
+  const changesTree = useMemo(() => buildFileTree(changes), [changes])
+  const treeOf = (kind: 'staged' | 'changes'): DirNode => (kind === 'staged' ? stagedTree : changesTree)
+
+  const renderRow = (kind: 'staged' | 'changes') => (row: StatusRow): JSX.Element => {
+    const letter = stLetter(row, kind)
+    const dir = row.newPath.lastIndexOf('/') === -1 ? '' : row.newPath.slice(0, row.newPath.lastIndexOf('/'))
+    return (
+      <div>
+        <div className="gc-row" style={{ padding: '1px 2px' }}>
+          <span className="gc-file" style={{ cursor: 'pointer' }} title={row.file} onClick={() => { void showDiff(row.file) }}>{row.newPath.split('/').pop()}</span>
+          {dir !== '' ? <span className="gc-path">{dir}</span> : null}
+          <span style={{ flex: 1 }} />
+          <span className="actions" style={{ display: 'flex', gap: 2, opacity: 0, transition: 'opacity .15s' }} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1' }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0' }}>
+            {kind === 'staged' ? (
+              <button className="gc-btn" disabled={busy !== null} onClick={() => act('unstage', () => api.unstage(path, row.file))} title={t('actions.unstage')}>{t('actions.unstageShort')}</button>
+            ) : (
+              <>
+                <button className="gc-btn" disabled={busy !== null} onClick={() => act('stage', () => api.stage(path, row.file))} title={t('actions.stage')}>{t('actions.stageShort')}</button>
+                <button className="gc-btn" disabled={busy !== null} onClick={() => { if (confirm(t('changes.confirmDiscard'))) void act('discard', () => api.discard(path, row.file)) }} title={t('actions.discard')}>{t('actions.discardShort')}</button>
+              </>
+            )}
+          </span>
+          <span className={stClass(letter)}>{letter}</span>
+        </div>
+        {diffFile === row.file && (
+          <div className="gc-diff">{diffLoading ? '...' : diffData || t('diff.empty')}</div>
+        )}
+      </div>
+    )
+  }
+
+  const doCommit = (): void => { if (message.trim()) void act('commit', () => api.commit(path, message)).then(() => setMessage('')) }
+
+  const outCommits = outgoing?.commits ?? []
 
   return (
     <div>
-      <div className="gc-row" style={{ marginBottom: 6 }}>
-        <button className="gc-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPush(path))}>{t('stash.push')}</button>
-        <button className="gc-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPop(path))}>{t('stash.pop')}</button>
+      <div className="gc-commitbox">
+        <input className="gc-input" value={message} onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) doCommit() }}
+          placeholder={t('changes.commitPlaceholder')} />
+        <button className="gc-btn primary" onClick={doCommit} disabled={busy !== null || !message.trim()}>{t('changes.commit')}</button>
       </div>
       <div className="gc-row" style={{ justifyContent: 'space-between' }}>
         <span className="gc-muted">{data?.ok === true && lines.length === 0 ? t('changes.clean') : `${lines.length} files`}</span>
         <span style={{ display: 'flex', gap: 4 }}>
+          <button className="gc-btn" onClick={() => setTreeView(!treeView)} title={treeView ? t('changes.flat') : t('changes.tree')}>{treeView ? '☰' : '🌳'}</button>
           <button className="gc-btn" onClick={() => act('stage', () => api.stageAll(path))} disabled={busy !== null}>{t('changes.stageAll')}</button>
           <button className="gc-btn" onClick={() => act('fetch', () => api.fetch(path))} disabled={busy !== null}>{t('changes.fetch')}</button>
           <button className="gc-btn" onClick={() => act('pull', () => api.pull(path))} disabled={busy !== null}>{t('changes.pull')}</button>
-          <button className="gc-btn" onClick={() => act('push', () => api.push(path))} disabled={busy !== null}>{t('changes.push')}</button>
+          <button className="gc-btn" onClick={() => act('push', () => api.push(path))} disabled={busy !== null}>{t('changes.push')}{(flow?.ahead ?? 0) > 0 ? ` ↑${flow?.ahead}` : ''}</button>
         </span>
       </div>
+      <div className="gc-row" style={{ marginBottom: 4 }}>
+        <button className="gc-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPush(path))}>{t('stash.push')}</button>
+        <button className="gc-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPop(path))}>{t('stash.pop')}</button>
+      </div>
       {error ? <div className="gc-err">{error}</div> : null}
-      {([
-        [grouped.staged, t('changes.staged')],
-        [grouped.untracked, t('changes.untracked')],
-        [grouped.unstaged, t('changes.unstaged')],
-      ] as [string[], string][]).map(([files, label]) => {
-        if (!files.length) return null
+      {groups.map(({ key, label, rows: groupRows, kind }) => {
+        if (!groupRows.length) return null
         return (
-          <div key={label}>
-            <div className="gc-muted" style={{ marginTop: 6 }}>{label}（{files.length}）</div>
-            {files.map((file) => (
-              <div key={file}>
-                <div className="gc-row">
-                  <span className="gc-file" style={{ cursor: 'pointer' }} onClick={() => { void showDiff(file) }}>{file}</span>
-                  {grouped.untracked.includes(file) ? (
-                    <button className="gc-btn" onClick={() => act('stage', () => api.stage(path, file))} disabled={busy !== null}>{t('actions.stage')}</button>
-                  ) : (
-                    <button className="gc-btn" onClick={() => act('unstage', () => api.unstage(path, file))} disabled={busy !== null}>{t('actions.unstage')}</button>
-                  )}
-                </div>
-                {diffFile === file && (
-                  <div className="gc-diff">{diffLoading ? '...' : diffData || t('diff.empty')}</div>
-                )}
-              </div>
-            ))}
+          <div key={key}>
+            <div className="gc-muted" style={{ marginTop: 6 }}>{label}（{groupRows.length}）</div>
+            {treeView
+              ? <ChangeRowTree node={treeOf(kind)} depth={0} expanded={expanded} toggle={toggleDir} renderFile={renderRow(kind)} />
+              : groupRows.map(renderRow(kind))}
           </div>
         )
       })}
-      {lines.length > 0 ? (
-        <div className="gc-row" style={{ marginTop: 8 }}>
-          <input className="gc-input" value={message} onChange={(e) => setMessage(e.target.value)} placeholder={t('changes.commitMessage')} />
-          <button className="gc-btn primary" onClick={() => act('commit', () => api.commit(path, message))} disabled={busy !== null || !message.trim()}>{t('changes.commit')}</button>
+      {outCommits.length > 0 ? (
+        <div className="gc-section" style={{ marginTop: 10 }}>
+          <div className="head">{t('changes.outgoing')}（{outCommits.length}）</div>
+          {outCommits.map((c) => (
+            <div className="gc-row" key={c.sha} style={{ padding: '1px 2px' }}>
+              <span className="sha">{c.sha}</span>
+              <span className="sub" title={c.subject}>{c.subject}</span>
+            </div>
+          ))}
+          <button className="gc-btn primary" style={{ marginTop: 4 }} disabled={busy !== null} onClick={() => act('push', () => api.push(path))}>
+            {t('changes.push')} ↑{outCommits.length}
+          </button>
         </div>
       ) : null}
     </div>
@@ -551,6 +676,24 @@ function Graph({ api, path }: { api: GitcompassApi; path: string }): JSX.Element
 
   const doOp = async (sha: string, fn: () => Promise<unknown>): Promise<void> => { setBusySha(sha); try { await fn() } catch (e) { alert(String(e instanceof Error ? e.message : e)) } finally { setBusySha(null) } }
 
+  // 三层下钻：提交 → 该提交变更文件 → 单文件补丁
+  const [openSha, setOpenSha] = useState<string | null>(null)
+  const [openFiles, setOpenFiles] = useState<Array<{ path: string; additions: number | null; deletions: number | null }>>([])
+  const [openFile, setOpenFile] = useState<string | null>(null)
+  const [patch, setPatch] = useState<string>('')
+  const [drillLoading, setDrillLoading] = useState(false)
+
+  const toggleSha = async (sha: string): Promise<void> => {
+    if (openSha === sha) { setOpenSha(null); setOpenFile(null); setPatch(''); return }
+    setOpenSha(sha); setOpenFile(null); setPatch(''); setDrillLoading(true)
+    try { const r = await api.commitFiles(path, sha); setOpenFiles(r.files) } catch { setOpenFiles([]) } finally { setDrillLoading(false) }
+  }
+  const openPatch = async (sha: string, file: string): Promise<void> => {
+    if (openFile === file) { setOpenFile(null); setPatch(''); return }
+    setOpenFile(file); setPatch('')
+    try { const r = await api.commitPatch(path, sha, file); setPatch(r.patch) } catch { setPatch('(patch error)') }
+  }
+
   if (!data) return <div className="gc-empty">{t('common.loading')}</div>
 
   const laneColors = ['#58a6ff', '#2ea043', '#d29922', '#f85149', '#bc8cff', '#39d353', '#f0883e', '#db61a2']
@@ -559,20 +702,40 @@ function Graph({ api, path }: { api: GitcompassApi; path: string }): JSX.Element
   return (
     <div>
       {layout.map((c) => (
-        <div className="gc-commit" key={c.sha}>
-          <span className="gc-lane" title={`lane ${c.lane}`}>
-            {Array.from({ length: maxLane + 1 }, (_, i) => (
-              <span key={i} className="gc-lane-line" style={{ backgroundColor: i === c.lane ? laneColors[c.lane % laneColors.length] : 'transparent', marginRight: i < maxLane ? 2 : 0 }} />
-            ))}
-          </span>
-          <span className="sha" title={`${c.sha}\n${c.author} ${c.date}`}>{c.sha.slice(0, 7)}</span>
-          <span className="sub">{c.subject}</span>
-          {c.prNumber ? <span className="gc-chip green">PR #{c.prNumber}</span> : null}
-          <span className="gc-muted" style={{ fontSize: 10 }}>{c.author}</span>
-          <span className="actions" style={{ display: 'flex', gap: 2, opacity: 0, transition: 'opacity .15s' }} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1' }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0' }}>
-            <button className="gc-btn" disabled={busySha !== null} onClick={() => doOp(c.sha, () => api.cherryPick(path, c.sha))} title={t('graph.cherryPick')}>{t('graph.cp')}</button>
-            <button className="gc-btn" disabled={busySha !== null} onClick={() => doOp(c.sha, () => api.revertCommit(path, c.sha))} title={t('graph.revert')}>{t('graph.rv')}</button>
-          </span>
+        <div key={c.sha}>
+          <div className="gc-commit">
+            <span className="gc-lane" title={`lane ${c.lane}`}>
+              {Array.from({ length: maxLane + 1 }, (_, i) => (
+                <span key={i} className="gc-lane-line" style={{ backgroundColor: i === c.lane ? laneColors[c.lane % laneColors.length] : 'transparent', marginRight: i < maxLane ? 2 : 0 }} />
+              ))}
+            </span>
+            <span className="sha" style={{ cursor: 'pointer' }} title={`${c.sha}\n${c.author} ${c.date}`} onClick={() => { void toggleSha(c.sha) }}>{c.sha.slice(0, 7)}</span>
+            <span className="sub" style={{ cursor: 'pointer' }} onClick={() => { void toggleSha(c.sha) }}>{c.subject}</span>
+            {openSha === c.sha ? <span className="gc-caret" style={{ fontSize: 10 }}>▾</span> : null}
+            {c.prNumber ? <span className="gc-chip green">PR #{c.prNumber}</span> : null}
+            <span className="gc-muted" style={{ fontSize: 10 }}>{c.author}</span>
+            <span className="actions" style={{ display: 'flex', gap: 2, opacity: 0, transition: 'opacity .15s' }} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1' }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0' }}>
+              <button className="gc-btn" disabled={busySha !== null} onClick={() => doOp(c.sha, () => api.cherryPick(path, c.sha))} title={t('graph.cherryPick')}>{t('graph.cp')}</button>
+              <button className="gc-btn" disabled={busySha !== null} onClick={() => doOp(c.sha, () => api.revertCommit(path, c.sha))} title={t('graph.revert')}>{t('graph.rv')}</button>
+            </span>
+          </div>
+          {openSha === c.sha ? (
+            <div className="gc-drill" style={{ margin: '2px 0 6px 18px', borderLeft: '2px solid var(--gc-border)', paddingLeft: 8 }}>
+              {drillLoading ? <div className="gc-muted" style={{ fontSize: 11 }}>{t('common.loading')}</div> : null}
+              {!drillLoading && openFiles.length === 0 ? <div className="gc-muted" style={{ fontSize: 11 }}>{t('graph.noFiles')}</div> : null}
+              {openFiles.map((f) => (
+                <div key={f.path}>
+                  <div className="gc-row" style={{ padding: '1px 0' }}>
+                    <span className="gc-file" style={{ cursor: 'pointer', fontSize: 11 }} title={f.path} onClick={() => { void openPatch(c.sha, f.path) }}>{f.path.split('/').pop()}</span>
+                    <span style={{ flex: 1 }} />
+                    {f.additions !== null ? <span className="gc-numstat">+{f.additions}</span> : null}
+                    {f.deletions !== null ? <span className="gc-numstat del">−{f.deletions}</span> : null}
+                  </div>
+                  {openFile === f.path ? <div className="gc-diff">{patch || '...'}</div> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       ))}
     </div>
@@ -965,12 +1128,15 @@ type ComparePayload = {
 }
 
 function FileComparePane({ payload }: { payload: ComparePayload }): JSX.Element {
-  if (payload.binary) return <div className="gc-trunc-note">{t('agent.binary')}</div>
-  const beforeLines = payload.before.exists ? buildLines(payload.before.text, payload.delLines) : null
-  const afterLines = buildLines(payload.after.text, payload.addLines)
+  if (!payload || payload.binary) return <div className="gc-trunc-note">{t('agent.binary')}</div>
+  const beforeText = payload.before?.text ?? ''
+  const afterText = payload.after?.text ?? ''
+  const beforeExists = payload.before?.exists === true
+  const beforeLines = beforeExists ? buildLines(beforeText, payload.delLines ?? []) : null
+  const afterLines = buildLines(afterText, payload.addLines ?? [])
   return (
     <div className="gc-filediff">
-      <FilePane title="修改前 · HEAD" cls="before" lines={beforeLines} missingNote={payload.before.exists ? undefined : t('agent.newFile')} />
+      <FilePane title="修改前 · HEAD" cls="before" lines={beforeLines} missingNote={beforeExists ? undefined : t('agent.newFile')} />
       <FilePane title="修改后 · 工作区" cls="after" lines={afterLines} />
       {payload.truncated && <div className="gc-trunc-note">{t('agent.diffTruncated')}</div>}
     </div>
@@ -1215,7 +1381,27 @@ function AgentView({ api, events }: { api: GitcompassApi; events: GitEvent[] }):
 
 type TabId = 'branches' | 'changes' | 'graph' | 'prs' | 'issues' | 'github' | 'agent'
 
-export function CompassPanel({ api, sessions }: { api: GitcompassApi; sessions: { list: { getSnapshot(): { current?: string; byId: Record<string, { cwd?: string }> }; subscribe(fn: () => void): () => void } } }): JSX.Element {
+/** 渲染错误只损失面板内容，不再炸掉整个宿主 UI；可原地重置。 */
+class PanelErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error }
+  }
+  render(): ReactNode {
+    if (this.state.error === null) return this.props.children
+    return (
+      <div className="gitcompass-panel" style={{ padding: 14 }}>
+        <div style={{ color: 'var(--gc-red)', fontWeight: 600, marginBottom: 4 }}>gitcompass 渲染错误 / render error</div>
+        <div style={{ opacity: .75, whiteSpace: 'pre-wrap', fontFamily: 'var(--gc-mono)', fontSize: 11, marginBottom: 10 }}>
+          {String(this.state.error.message || this.state.error)}
+        </div>
+        <button className="gc-btn" onClick={() => { this.setState({ error: null }) }}>重置面板 / reset</button>
+      </div>
+    )
+  }
+}
+
+function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { list: { getSnapshot(): { current?: string; byId: Record<string, { cwd?: string }> }; subscribe(fn: () => void): () => void } } }): JSX.Element {
   // SSE 订阅常驻顶层：即使切到其他标签页，其他会话的提交/审批事件仍在积累，
   // 回到 Agent 标签即可看到全部历史（不因 unmount 断流）。
   const agentEvents = useGitEvents(200)
@@ -1348,7 +1534,7 @@ export function CompassPanel({ api, sessions }: { api: GitcompassApi; sessions: 
         {!path ? <div className="gc-empty">{t('repo.none')}</div> : (
           <>
             {tab === 'branches' && <Branches api={api} path={path} />}
-            {tab === 'changes' && <Changes api={api} path={path} />}
+            {tab === 'changes' && <Changes api={api} path={path} flow={flow} />}
             {tab === 'graph' && <Graph api={api} path={path} />}
             {tab === 'prs' && <PRs api={api} repoInfo={repoInfo} auth={authState} />}
             {tab === 'issues' && <Issues api={api} repoInfo={repoInfo} auth={authState} />}
@@ -1358,5 +1544,13 @@ export function CompassPanel({ api, sessions }: { api: GitcompassApi; sessions: 
         )}
       </div>
     </div>
+  )
+}
+
+export function CompassPanel(props: Parameters<typeof CompassPanelInner>[0]): JSX.Element {
+  return (
+    <PanelErrorBoundary>
+      <CompassPanelInner {...props} />
+    </PanelErrorBoundary>
   )
 }
