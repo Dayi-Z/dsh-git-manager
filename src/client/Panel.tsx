@@ -139,6 +139,20 @@ body[data-ds-dark-theme] .gitcompass-panel{
 .gc-dl.meta{opacity:.42;font-size:10px}
 /* Trae 式变更页 */
 .gc-commitbox{display:flex;gap:6px;margin-bottom:8px}
+/* 提交框内联的次要提交动作（撤销/修补）：紧凑图标钮，视觉上属于"提交"动词组 */
+.gc-commitbox .gc-btn{flex:none}
+.gc-commitbox .gc-input{flex:1;min-width:0}
+/* 变更页工具栏：统一 26px 高、图标钮等宽、允许优雅换行不粘连 */
+.gc-changes-bar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:3px 5px}
+.gc-changes-bar .gc-btn{padding:3px 9px}
+.gc-changes-bar .sep{width:1px;height:16px;background:var(--gc-border);flex:none;margin:0 2px}
+/* 传出的更改行：sha 与标题之间留呼吸，标题单行省略 */
+.gc-outrow{display:flex;gap:8px;align-items:center;padding:2px 5px;min-width:0}
+.gc-outrow .sha{flex:none}
+.gc-outrow .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.85}
+/* 贮藏库：紧凑行内列表 */
+.gc-stashlist{border:1px solid var(--gc-border);border-radius:6px;padding:4px 6px;margin:0 0 6px;background:var(--gc-bg-soft);display:flex;flex-direction:column;gap:1px}
+.gc-stashlist .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gc-commitbox .gc-input{flex:1;min-width:0}
 .gc-path{opacity:.45;font-size:10px;font-family:var(--gc-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px}
 .gc-st{flex:none;font-family:var(--gc-mono);font-size:10px;font-weight:700;line-height:1;padding:3px 5px;border-radius:4px;border:1px solid var(--gc-border);opacity:.75;min-width:18px;text-align:center}
@@ -254,7 +268,7 @@ body[data-ds-dark-theme] .gitcompass-panel{
 .gc-settings{position:absolute;top:34px;right:10px;z-index:60;display:flex;flex-direction:column;gap:6px;background:var(--gc-bg);border:1px solid var(--gc-border);border-radius:8px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);min-width:220px}
 .gc-settings-row{display:flex;align-items:center;gap:4px}
 .gc-settings-row .gc-muted{min-width:52px}
-.gc-stashlist{border:1px solid var(--gc-border);border-radius:6px;padding:4px 6px;margin-bottom:6px;background:var(--gc-bg-soft)}
+.gc-settings-row .gc-btn{padding:2px 8px;font-size:11px}
 `
 
 // ---------------------------------------------------------------------------
@@ -823,34 +837,35 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) doCommit() }}
           placeholder={t('changes.commitPlaceholder')} />
         <button className="gc-btn primary" onClick={doCommit} disabled={busy !== null || !message.trim()}>{t('changes.commit')}</button>
+        <button className="gc-btn sm" disabled={busy !== null} title={`${t('undo.commit')} — ${t('op.undone')}`} onClick={() => void act('undo', () => api.undoCommit(path))}><Icon name="clock-reverse" size={13} /></button>
+        <button className="gc-btn sm" disabled={busy !== null} title={t('amend.last')} onClick={() => void act('amend', () => api.amend(path))}><Icon name="commit" size={13} /></button>
       </div>
-      <div className="gc-row" style={{ justifyContent: 'space-between' }}>
-        <span className="gc-muted">{data?.ok === true && lines.length === 0 ? t('changes.clean') : `${lines.length} files`}</span>
-        <span style={{ display: 'flex', gap: 4 }}>
-          <button className="gc-btn" onClick={() => setTreeView(!treeView)} title={treeView ? t('changes.flat') : t('changes.tree')}>
-            <Icon name={treeView ? 'list' : 'folder-tree'} size={13} />
-          </button>
-          <button className="gc-btn" onClick={() => act('stage', () => api.stageAll(path))} disabled={busy !== null}>{t('changes.stageAll')}</button>
-          <button className="gc-btn sm" disabled={busy !== null} title={`${t('undo.commit')} · ${t('op.undone')}`} onClick={() => void act('undo', () => api.undoCommit(path))}><Icon name="clock-reverse" size={13} /></button>
-          <button className="gc-btn sm" disabled={busy !== null} title={t('amend.last')} onClick={() => void act('amend', () => api.amend(path))}><Icon name="commit" size={13} /></button>
-          <button className="gc-btn" onClick={() => act('fetch', () => api.fetch(path))} disabled={busy !== null}>{t('changes.fetch')}</button>
-          <button
-            className={`gc-btn${pullRebase ? ' primary' : ''}`}
-            title={pullRebase ? t('pull.rebase') : t('changes.pull')}
-            onClick={() => { const next = !pullRebase; setPullRebaseState(next); setPullRebaseFlag(next) }}
-          >{pullRebase ? t('pull.rebase') : t('changes.pull')}</button>
-          <button className="gc-btn" onClick={() => act('pull', () => api.pull(path, pullRebase))} disabled={busy !== null}><Icon name="arrow-down" size={12} /></button>
-          <button className="gc-btn" onClick={() => act('push', () => api.push(path))} disabled={busy !== null}>{t('changes.push')}{(flow?.ahead ?? 0) > 0 ? ` ↑${flow?.ahead}` : ''}</button>
-        </span>
-      </div>
-      <div className="gc-row" style={{ marginBottom: 4 }}>
+      <div className="gc-changes-bar">
+        <button className="gc-btn sm" onClick={() => setTreeView(!treeView)} title={treeView ? t('changes.flat') : t('changes.tree')}>
+          <Icon name={treeView ? 'list' : 'folder-tree'} size={13} />
+        </button>
+        <button className="gc-btn" onClick={() => act('stage', () => api.stageAll(path))} disabled={busy !== null}>{t('changes.stageAll')}</button>
+        <span className="sep" />
+        <button className="gc-btn" onClick={() => act('fetch', () => api.fetch(path))} disabled={busy !== null}>{t('changes.fetch')}</button>
+        <button
+          className={`gc-btn${pullRebase ? ' primary' : ''}`}
+          title={t('pull.rebase')}
+          onClick={() => { const next = !pullRebase; setPullRebaseState(next); setPullRebaseFlag(next) }}
+        >{pullRebase ? t('pull.rebase') : t('changes.pull')}</button>
+        <button className="gc-btn sm" onClick={() => act('pull', () => api.pull(path, pullRebase))} disabled={busy !== null} title={pullRebase ? t('pull.rebase') : t('changes.pull')}>
+          <Icon name="arrow-down" size={13} />
+        </button>
+        <button className="gc-btn" onClick={() => act('push', () => api.push(path))} disabled={busy !== null}>{t('changes.push')}{(flow?.ahead ?? 0) > 0 ? ` ↑${flow?.ahead}` : ''}</button>
+        <span className="sep" />
         <button className="gc-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPush(path))}>{t('stash.push')}</button>
-        <button className="gc-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPop(path))}>{t('stash.pop')}</button>
-        <button className={`gc-btn${stashOpen ? ' primary' : ''}`} onClick={() => setStashOpen(!stashOpen)} title={t('stash.list')}><Icon name="archive" size={12} />{t('stash.list')}{stashRows.length > 0 ? ` (${stashRows.length})` : ''}</button>
+        <button className="gc-btn sm" disabled={busy !== null || stashRows.length === 0} title={t('stash.pop')} onClick={() => void act('stash', () => api.stashPop(path)).then(reloadStash)}><Icon name="undo" size={13} /></button>
+        <button className={`gc-btn sm${stashOpen ? ' primary' : ''}`} onClick={() => setStashOpen(!stashOpen)} title={t('stash.list')}>
+          <Icon name="archive" size={13} />{stashRows.length > 0 ? <span style={{ fontSize: 10 }}>{stashRows.length}</span> : null}
+        </button>
+        <span className="gc-muted" style={{ marginLeft: 'auto', fontSize: 10, flex: 'none' }}>{data?.ok === true && lines.length === 0 ? t('changes.clean') : `${lines.length} files`}</span>
       </div>
-      {stashOpen ? (
+      {stashOpen && stashRows.length > 0 ? (
         <div className="gc-stashlist">
-          {stashRows.length === 0 ? <div className="gc-muted" style={{ padding: '2px 4px' }}>{t('stash.empty')}</div> : null}
           {stashRows.map((s) => (
             <div key={s.ref} className="gc-row" style={{ padding: '1px 2px' }}>
               <span className="sha">{s.ref}</span>
@@ -878,7 +893,7 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
         <div className="gc-section" style={{ marginTop: 10 }}>
           <div className="head">{t('changes.outgoing')}（{outCommits.length}）</div>
           {outCommits.map((c) => (
-            <div className="gc-row" key={c.sha} style={{ padding: '1px 2px' }}>
+            <div className="gc-outrow" key={c.sha}>
               <span className="sha">{c.sha}</span>
               <span className="sub" title={c.subject}>{c.subject}</span>
             </div>
