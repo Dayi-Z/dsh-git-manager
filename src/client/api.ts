@@ -144,15 +144,15 @@ export class GitcompassApi {
     return call('/gitu/github/issue-comment', { owner, repo, number, body })
   }
   /** 面板内预先批准某工具的某次调用（agent 随后请求审批时跳过弹窗）。 */
-  preApprove(tool: string, callId?: string): Promise<{ ok: boolean; value: { preApproved: boolean } }> {
+  preApprove(tool: string, callId?: string): Promise<{ preApproved: boolean }> {
     return call('/gitu/preapprove', { tool, callId: callId ?? '' })
   }
   /** 本会话当前生效的预批准清单（tool 或 tool#callId）。 */
-  preApproveList(): Promise<{ ok: boolean; value: { tools: string[] } }> {
+  preApproveList(): Promise<{ tools: string[] }> {
     return call('/gitu/preapprove-list', {})
   }
   /** 撤销会话预批准（tool 省略时清空全部）。 */
-  clearPreApprove(tool?: string): Promise<{ ok: boolean; value: { cleared: boolean; tools: string[] } }> {
+  clearPreApprove(tool?: string): Promise<{ cleared: boolean; tools: string[] }> {
     return call('/gitu/preapprove-clear', { tool: tool ?? '' })
   }
   /** 对一次“正在等待”的审批请求给出实时决定（批准/拒绝）。 */
