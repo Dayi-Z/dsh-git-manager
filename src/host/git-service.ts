@@ -497,7 +497,9 @@ export class GitService {
       // FIELD 紧跟 %H，REC 作整条记录终止符——split(REC) 后每条记录 = sha⒟an⒟ae⒟…⒟message。
       const log = await this.runner.run(['log', '--reverse', `--format=%H${FIELD}%an${FIELD}%ae${FIELD}%aI${FIELD}%cn${FIELD}%ce${FIELD}%cI${FIELD}%B${REC}`, `${apiHead}..HEAD`], canonical)
       if (log.exitCode !== 0) return { ok: false, output: '', error: { code: 'log-failed', message: log.stderr.trim() || 'git log failed' } }
-      const records = log.stdout.split(REC).filter((s) => s.trim() !== '')
+      // git log 在每条目后补一个换行 → 除首条外每条记录以 \n 开头：只剥前导换行，
+      // 保留消息尾部的换行（sha 保真）。之后 REC 分割、FIELD 解析。
+      const records = log.stdout.split(REC).map((s) => s.replace(/^\n/, '')).filter((s) => s.trim() !== '')
       if (records.length === 0) return { ok: false, output: '', error: { code: 'diverged', message: '远端包含本地没有的提交（分叉），快进式 API 推送不适用' } }
       for (const rec of records) {
         const f = rec.split(FIELD)
