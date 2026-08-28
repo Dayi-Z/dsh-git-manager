@@ -25,7 +25,7 @@ import { t, setLocaleOverride, getLocaleOverride } from './i18n.ts'
 import { layoutGraph } from './graph.ts'
 import { useGitEvents, pendingApprovalCount, type GitEvent } from './events.ts'
 import { onOpFeedback, report, reportError, type OpFeedback } from './feedback.ts'
-import { Icon, type IconName } from './icons.tsx'
+import { Icon, FileIcon, type IconName } from './icons.tsx'
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -80,6 +80,12 @@ body[data-ds-dark-theme] .gitcompass-panel{
 .gc-tab.on{opacity:1;border-bottom-color:var(--gc-accent);color:var(--gc-accent);font-weight:600}
 .gc-body{flex:1;overflow:auto;padding:8px}
 .gc-row{display:flex;gap:6px;align-items:center;padding:3px 5px;border-radius:5px}
+/* 文件行：类型图标 + 加权文件名 + 弱化目录 + 状态字母；悬停显操作并给底色 */
+.gc-filerow{display:flex;gap:6px;align-items:center;padding:3px 5px;border-radius:5px;cursor:pointer;transition:background .12s}
+.gc-filerow:hover{background:var(--gc-hover)}
+.gc-filerow .gc-file{font-weight:500}
+.gc-filerow .gc-path{opacity:.55;font-size:10.5px}
+.gc-filerow .actions{margin-left:auto}
 .gc-row:hover{background:var(--gc-hover)}
 .gc-row .gc-file{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;font-size:12px}
 .gc-chip{font-size:10px;padding:2px 7px;border-radius:6px;border:1px solid var(--gc-border-strong);background:var(--gc-bg-soft);opacity:.95}
@@ -278,6 +284,9 @@ body[data-ds-dark-theme] .gitcompass-panel{
 // ---------------------------------------------------------------------------
 // 设置：轮询速度（localStorage 持久化；usePoll 读取缩放系数）
 // ---------------------------------------------------------------------------
+
+/** 构建标识：设置菜单页脚显示，一眼诊断浏览器端缓存滞后。 */
+const GC_VERSION = '1.6.2'
 
 type PollSpeed = 'fast' | 'std' | 'slow'
 const POLL_SCALE: Record<PollSpeed, number> = { fast: 0.5, std: 1, slow: 2 }
@@ -802,18 +811,19 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
     const dir = row.newPath.lastIndexOf('/') === -1 ? '' : row.newPath.slice(0, row.newPath.lastIndexOf('/'))
     return (
       <div>
-        <div className="gc-row" style={{ padding: '1px 2px' }}>
-          <span className="gc-file" style={{ cursor: 'pointer' }} title={row.file} onClick={() => { void showDiff(row.file) }}>{row.newPath.split('/').pop()}</span>
+        <div className="gc-filerow" onClick={() => { void showDiff(row.file) }}>
+          <FileIcon name={row.newPath.split('/').pop() ?? row.newPath} />
+          <span className="gc-file" style={{ cursor: 'pointer', fontWeight: 500 }} title={row.file}>{row.newPath.split('/').pop()}</span>
           {dir !== '' ? <span className="gc-path">{dir}</span> : null}
           <span style={{ flex: 1 }} />
           <span className="actions" style={{ display: 'flex', gap: 2, opacity: 0, transition: 'opacity .15s' }} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1' }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0' }}>
             {kind === 'staged' ? (
-              <button className="gc-btn sm" disabled={busy !== null} onClick={() => act('unstage', () => api.unstage(path, row.file))} title={t('actions.unstage')}><Icon name="minus" size={13} /></button>
+              <button className="gc-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); act('unstage', () => api.unstage(path, row.file)) }} title={t('actions.unstage')}><Icon name="minus" size={13} /></button>
             ) : (
               <>
-                <button className="gc-btn sm" disabled={busy !== null} onClick={() => act('stage', () => api.stage(path, row.file))} title={t('actions.stage')}><Icon name="plus" size={13} /></button>
-                <button className="gc-btn sm" disabled={busy !== null} onClick={() => { if (confirm(t('changes.confirmDiscard'))) void act('discard', () => api.discard(path, row.file)) }} title={t('actions.discard')}><Icon name="undo" size={13} /></button>
-                {row.untracked && <button className="gc-btn sm" disabled={busy !== null} onClick={() => void act('ignore', () => api.gitignoreAdd(path, row.file))} title={t('gitignore.add')}><Icon name="ban" size={13} /></button>}
+                <button className="gc-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); act('stage', () => api.stage(path, row.file)) }} title={t('actions.stage')}><Icon name="plus" size={13} /></button>
+                <button className="gc-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); if (confirm(t('changes.confirmDiscard'))) void act('discard', () => api.discard(path, row.file)) }} title={t('actions.discard')}><Icon name="undo" size={13} /></button>
+                {row.untracked && <button className="gc-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); void act('ignore', () => api.gitignoreAdd(path, row.file)) }} title={t('gitignore.add')}><Icon name="ban" size={13} /></button>}
               </>
             )}
           </span>
@@ -1866,6 +1876,7 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
                   >{spd === 'fast' ? t('settings.pollFast') : spd === 'std' ? t('settings.pollStd') : t('settings.pollSlow')}</button>
                 ))}
               </div>
+              <div className="gc-muted" style={{ fontSize: 9, opacity: 0.6 }}>gitcompass v{GC_VERSION}</div>
             </div>
           ) : null}
         </div>

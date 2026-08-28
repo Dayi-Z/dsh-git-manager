@@ -216,3 +216,46 @@ export function Icon({ name, size = 14, className }: { name: IconName; size?: nu
     </svg>
   )
 }
+
+// ---------------------------------------------------------------------------
+// FileIcon：文件类型图标（单一文档轮廓路径 × 按扩展名着色）
+// GitHub Linguist 语言色的面板级子集；未知扩展名回退到静默灰。
+// ---------------------------------------------------------------------------
+
+const FILE_LANG: Record<string, string> = {
+  ts: '#3178c6', tsx: '#3178c6', mts: '#3178c6', cts: '#3178c6',
+  js: '#b3a24a', mjs: '#b3a24a', cjs: '#b3a24a', jsx: '#b3a24a',
+  json: '#cbcb41', jsonc: '#cbcb41',
+  md: '#519aba', mdx: '#519aba', txt: '#9aa4ae',
+  css: '#a074c4', scss: '#c6538c', less: '#6b7fc4',
+  html: '#e37e4f', vue: '#41b883', svelte: '#ff6347',
+  py: '#4b8bbe', rs: '#c67c52', go: '#4da6c8', java: '#b07219',
+  yml: '#c56060', yaml: '#c56060', toml: '#9c8f7f', ini: '#9c8f7f',
+  sh: '#89c777', ps1: '#6b8cc4', bat: '#9aa4ae',
+  png: '#bc8cff', jpg: '#bc8cff', jpeg: '#bc8cff', gif: '#bc8cff', svg: '#a074c4', webp: '#bc8cff', ico: '#bc8cff',
+  lock: '#cbcb41', gitignore: '#e0823d', env: '#c56060',
+}
+
+export function FileIcon({ name, size = 13 }: { name: string; size?: number }): JSX.Element {
+  const dot = name.lastIndexOf('.')
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : (name.startsWith('.') ? name.slice(1).toLowerCase() : '')
+  const color = FILE_LANG[ext] ?? 'var(--gc-muted, #8b949e)'
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke={color}
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ flex: 'none', verticalAlign: '-2px' }}
+    >
+      <path d="M4 1.8h5l3.2 3.2v9.2H4z" />
+      <path d="M9 1.8V5h3.2" />
+      <path d="M6 8.6h4M6 11h2.6" opacity=".55" />
+    </svg>
+  )
+}
