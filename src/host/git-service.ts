@@ -493,8 +493,9 @@ export class GitService {
       let apiHead = ref.object.sha
       if (apiHead === head) return { ok: true, output: '远端已与本地一致（up to date）' }
       let apiTree = (await ghApi<{ tree: { sha: string } }>('GET', `${repoPath}/git/commits/${apiHead}`)).tree.sha
-      // 待推提交（旧→新），完整元数据逐字段保留
-      const log = await this.runner.run(['log', '--reverse', `--format=%H${REC}%an${FIELD}%ae${FIELD}%aI${FIELD}%cn${FIELD}%ce${FIELD}%cI${FIELD}%B${REC}`, `${apiHead}..HEAD`], canonical)
+      // 待推提交（旧→新），完整元数据逐字段保留。
+      // FIELD 紧跟 %H，REC 作整条记录终止符——split(REC) 后每条记录 = sha⒟an⒟ae⒟…⒟message。
+      const log = await this.runner.run(['log', '--reverse', `--format=%H${FIELD}%an${FIELD}%ae${FIELD}%aI${FIELD}%cn${FIELD}%ce${FIELD}%cI${FIELD}%B${REC}`, `${apiHead}..HEAD`], canonical)
       if (log.exitCode !== 0) return { ok: false, output: '', error: { code: 'log-failed', message: log.stderr.trim() || 'git log failed' } }
       const records = log.stdout.split(REC).filter((s) => s.trim() !== '')
       if (records.length === 0) return { ok: false, output: '', error: { code: 'diverged', message: '远端包含本地没有的提交（分叉），快进式 API 推送不适用' } }

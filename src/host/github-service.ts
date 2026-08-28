@@ -52,6 +52,8 @@ async function directGh<T>(method: string, path: string, body: unknown, token: s
 function cliGh<T>(method: string, path: string, body?: unknown): Promise<GhResult<T>> {
   return new Promise((resolve, reject) => {
     const args = ['api', path, '--method', method]
+    // gh api 默认不读 stdin：带 body 的请求必须显式 --input -，否则载荷静默丢失
+    if (body !== undefined) args.push('--input', '-')
     const child = spawn('gh', args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
