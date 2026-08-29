@@ -83,11 +83,11 @@ body[data-ds-dark-theme] .gitcompass-panel{
 /* 文件行：类型图标 + 加权文件名 + 弱化目录 + 状态字母；悬停显操作并给底色 */
 .gc-filerow{display:flex;gap:6px;align-items:center;padding:3px 5px;border-radius:5px;cursor:pointer;transition:background .12s}
 .gc-filerow:hover{background:var(--gc-hover)}
-.gc-filerow .gc-file{font-weight:500}
-.gc-filerow .gc-path{opacity:.55;font-size:10.5px}
+.gc-filerow .gc-file{font-weight:500;font-size:11.5px}
+.gc-filerow .gc-path{opacity:.45;font-size:10px}
 .gc-filerow .actions{margin-left:auto}
 .gc-row:hover{background:var(--gc-hover)}
-.gc-row .gc-file{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;font-size:12px}
+.gc-row .gc-file{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;font-size:11.5px}
 .gc-chip{font-size:10px;padding:2px 7px;border-radius:6px;border:1px solid var(--gc-border-strong);background:var(--gc-bg-soft);opacity:.95}
 .gc-chip.green{color:var(--gc-accent);border-color:var(--gc-accent);background:var(--gc-accent-soft)}
 .gc-chip.red{color:var(--gc-red);border-color:var(--gc-red);background:var(--gc-del-bg)}
@@ -748,6 +748,7 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
   const [diffFile, setDiffFile] = useState<string | null>(null)
   const [diffData, setDiffData] = useState<string>('')
   const [diffLoading, setDiffLoading] = useState(false)
+  const [diffFailed, setDiffFailed] = useState(false)
   const [treeView, setTreeView] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const { data: outgoing } = usePoll(() => api.outgoing(path), [path], 10000)
@@ -778,11 +779,12 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
 
   const showDiff = async (file: string): Promise<void> => {
     if (diffFile === file) { setDiffFile(null); return }
-    setDiffFile(file); setDiffLoading(true)
+    setDiffFile(file); setDiffLoading(true); setDiffFailed(false)
     try {
       const r = await api.diff(path, file)
-      setDiffData(r.ok ? r.output : '(diff failed)')
-    } catch { setDiffData('(diff error)') } finally { setDiffLoading(false) }
+      setDiffData(r.ok ? r.output : '')
+      if (!r.ok) setDiffFailed(true)
+    } catch { setDiffData(''); setDiffFailed(true) } finally { setDiffLoading(false) }
   }
 
   const toggleDir = (p: string): void => setExpanded((prev) => { const n = new Set(prev); if (n.has(p)) n.delete(p); else n.add(p); return n })
@@ -830,7 +832,9 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
           <span className={stClass(letter)}>{letter}</span>
         </div>
         {diffFile === row.file && (
-          <DiffView patch={diffLoading ? '' : diffData} loading={diffLoading} />
+          diffFailed
+            ? <div className="gc-trunc-note">{t('diff.failed')}</div>
+            : <DiffView patch={diffLoading ? '' : diffData} loading={diffLoading} />
         )}
       </div>
     )
