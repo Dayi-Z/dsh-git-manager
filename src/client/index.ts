@@ -51,6 +51,38 @@ const PANEL_MAX_WIDTH = 760
 
 let frameEl: HTMLElement | null = null
 
+// ---------------------------------------------------------------------------
+// 自愈：shell 文档无缓存头 → 浏览器启发式缓存可能让页面停留在旧 rev 的
+// client.js 上（Ctrl+F5 对注入式模块无效）。定期以 no-store 取最新 shell，
+// 比对 gitcompass client.js 的 rev；不一致 → 整页重载一次。
+// sessionStorage 记录"已为该 rev 重载过"，防止循环。
+// ---------------------------------------------------------------------------
+
+function currentRev(): string {
+  const m = document.documentElement.innerHTML.match(/plugins\/gitcompass\/client\.js\?rev=([a-f0-9]+)/)
+  return m?.[1] ?? ''
+}
+
+function selfHeal(): void {
+  const mine = currentRev()
+  if (mine === '') return
+  void fetch('/', { cache: 'no-store' })
+    .then((r) => r.text())
+    .then((html) => {
+      const latest = html.match(/plugins\/gitcompass\/client\.js\?rev=([a-f0-9]+)/)?.[1] ?? ''
+      if (latest === '' || latest === mine) return
+      let reloadedFor = ''
+      try { reloadedFor = sessionStorage.getItem('gc.selfheal-rev') ?? '' } catch { /* noop */ }
+      if (reloadedFor === latest) return
+      try { sessionStorage.setItem('gc.selfheal-rev', latest) } catch { /* noop */ }
+      console.info(`gitcompass: client rev ${mine} → ${latest}, reloading`)
+      setTimeout(() => location.reload(), 800)
+    })
+    .catch(() => { /* 网络抖动：下个周期再试 */ })
+}
+setInterval(selfHeal, 60_000)
+setTimeout(selfHeal, 4_000)
+
 function loadPanelWidth(): number {
   try {
     const stored = Number(localStorage.getItem('gc.panelWidth'))
