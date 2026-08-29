@@ -8,9 +8,9 @@ const clientDir = join(root, 'client')
 
 const pluginId = 'gitcompass'
 const inputFile = join(clientDir, 'index.cjs')
-const outputFile = join(clientDir, 'index.js')
+const outputFile = join(clientDir, 'client.js')
 const mapInput = join(clientDir, 'index.cjs.map')
-const mapOutput = join(clientDir, 'index.js.map')
+const mapOutput = join(clientDir, 'client.js.map')
 
 let code = readFileSync(inputFile, 'utf-8')
 
@@ -19,7 +19,7 @@ let mapComment = ''
 const smMatch = code.match(/\n\/\/# sourceMappingURL=index\.cjs\.map\s*$/)
 if (smMatch) {
   code = code.slice(0, smMatch.index)
-  mapComment = '\n//# sourceMappingURL=index.js.map'
+  mapComment = '\n//# sourceMappingURL=client.js.map'
 }
 
 // Replace the initial exports setup with module/exports scaffolding
@@ -36,12 +36,12 @@ writeFileSync(outputFile, code, 'utf-8')
 // Update sourcemap to reference the renamed output file
 if (existsSync(mapInput)) {
   const map = JSON.parse(readFileSync(mapInput, 'utf-8'))
-  map.file = 'index.js'
+  map.file = 'client.js'
   writeFileSync(mapOutput, JSON.stringify(map), 'utf-8')
 }
 
-// Remove intermediate tsdown outputs
-for (const f of ['index.cjs', 'index.cjs.map', 'index.d.cts', 'index.d.cts.map']) {
+// Remove intermediate tsdown outputs AND old index.js / index.js.map
+for (const f of ['index.cjs', 'index.cjs.map', 'index.d.cts', 'index.d.cts.map', 'index.js', 'index.js.map']) {
   const fp = join(clientDir, f)
   if (existsSync(fp)) rmSync(fp)
 }

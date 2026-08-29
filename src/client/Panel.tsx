@@ -73,6 +73,7 @@ body[data-ds-dark-theme] .gitcompass-panel{
 .gc-step.active .dot{animation:gc-pulse 1.2s infinite}
 @keyframes gc-pulse{50%{opacity:.35}}
 .gc-arrow{opacity:.3}
+.gc-tabs,.gc-tab,.gc-tab .gc-ic{user-select:none;-webkit-user-select:none}
 .gc-tabs{display:flex;border-bottom:1px solid var(--gc-border);overflow-x:auto;padding:0 4px;gap:2px}
 .gc-tab{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:7px 2px;cursor:pointer;opacity:.6;border-bottom:2px solid transparent;white-space:nowrap;font-size:11.5px;font-weight:500;transition:opacity .15s,color .15s,border-color .15s;border-radius:0}
 .gc-tab .gc-ic{opacity:.85}

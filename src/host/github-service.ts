@@ -50,6 +50,7 @@ async function directGh<T>(method: string, path: string, body: unknown, token: s
 
 /** gh CLI 通道：`gh api` 走 gh 自己的网络/代理配置。仅在网络直连失败时启用。 */
 function cliGh<T>(method: string, path: string, body?: unknown): Promise<GhResult<T>> {
+  const GH_TIMEOUT = 10_000
   return new Promise((resolve, reject) => {
     const args = ['api', path, '--method', method]
     // gh api 默认不读 stdin：带 body 的请求必须显式 --input -，否则载荷静默丢失
@@ -57,12 +58,21 @@ function cliGh<T>(method: string, path: string, body?: unknown): Promise<GhResul
     const child = spawn('gh', args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
+    let done = false
+    const to = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch {}
+      if (!done) { done = true; reject(new Error('gh CLI timed out')) }
+    }, GH_TIMEOUT)
+    const finish = () => { clearTimeout(to) }
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
     child.stdout.on('data', (c: string) => { stdout += c })
     child.stderr.on('data', (c: string) => { stderr += c })
-    child.on('error', () => reject(new Error('gh CLI unavailable for API fallback')))
+    child.on('error', () => { if (!done) { done = true; finish(); reject(new Error('gh CLI unavailable for API fallback')) } })
     child.on('close', (code) => {
+      if (done) return
+      done = true
+      finish()
       if (code === 0) {
         try { resolve({ json: stdout.trim() === '' ? undefined as T : JSON.parse(stdout) as T, scopes: [] }) }
         catch (e) { reject(new Error(`gh api parse error: ${String(e instanceof Error ? e.message : e)}`)) }

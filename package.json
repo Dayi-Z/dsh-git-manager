@@ -77,7 +77,7 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./client": "./client/index.js",
+    "./client": "./client/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   }
