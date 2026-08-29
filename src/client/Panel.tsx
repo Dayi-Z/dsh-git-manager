@@ -952,7 +952,7 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
             <div key={c.sha}>
               <div
                 className={`gc-outrow${outOpenSha === c.sha ? ' on' : ''}`}
-                title={`${c.author} · ${c.date.slice(0, 10)}\n${c.subject}\n${t('outgoing.rowHint')}`}
+                title={`${c.author ?? ''}${c.author ? ' · ' : ''}${c.date ? c.date.slice(0, 10) : ''}\n${c.subject}\n${t('outgoing.rowHint')}`}
                 onClick={() => { void toggleOut(c.sha) }}
               >
                 <span className="caret"><Icon name={outOpenSha === c.sha ? 'chevron-down' : 'chevron-right'} size={10} /></span>
