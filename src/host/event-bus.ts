@@ -235,12 +235,15 @@ export function startRepoObserver(
   intervalMs = 5_000,
 ): () => void {
   const states = new Map<string, RepoState>()
-  let timer: ReturnType<typeof setInterval> | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = false
+  let busy = false
 
   const poll = async (): Promise<void> => {
-    if (stopped) return
-    const workspaces = ctx.workspaceRegistry.list()
+    if (stopped || busy) return
+    busy = true
+    try {
+      const workspaces = ctx.workspaceRegistry.list()
     for (const ws of workspaces) {
       try {
         const cwd = ws.path
@@ -290,15 +293,18 @@ export function startRepoObserver(
         states.set(cwd, { commit, branch, statusHash })
       } catch { /* skip workspace on error */ }
     }
+    } finally {
+      busy = false
+      if (!stopped) timer = setTimeout(() => { void poll() }, intervalMs)
+    }
   }
 
   // Initial poll after a short delay (let things settle)
-  setTimeout(() => { void poll() }, 2_000)
-  timer = setInterval(() => { void poll() }, intervalMs)
+  timer = setTimeout(() => { void poll() }, 2_000)
 
   return () => {
     stopped = true
-    if (timer) clearInterval(timer)
+    if (timer) clearTimeout(timer)
   }
 }
 
