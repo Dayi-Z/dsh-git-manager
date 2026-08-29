@@ -600,13 +600,15 @@ export class GitService {
   }
 
   /** 上游存在但未推送的提交（@{u}..HEAD）；无上游或无提交时为空数组。 */
-  async outgoing(path: string): Promise<{ commits: Array<{ sha: string; subject: string }> }> {
+  async outgoing(path: string): Promise<{ commits: Array<{ sha: string; subject: string; author: string; date: string }> }> {
     const canonical = await this.requireWorkspace(path)
-    const run = await this.runner.run(['log', '@{u}..HEAD', '--format=%h%x1f%s'], canonical)
+    const run = await this.runner.run(['log', '@{u}..HEAD', '--format=%h%x1f%an%x1f%aI%x1f%s'], canonical)
     if (run.exitCode !== 0) return { commits: [] }
     const commits = run.stdout.split('\n').filter((l) => l.trim() !== '').map((l) => {
-      const i = l.indexOf(REC)
-      return i === -1 ? { sha: l.trim(), subject: '' } : { sha: l.slice(0, i).trim(), subject: l.slice(i + 1).trim() }
+      const f = l.split(FIELD)
+      return f.length >= 4
+        ? { sha: f[0].trim(), author: f[1], date: f[2], subject: f[3] }
+        : { sha: l.trim(), author: '', date: '', subject: '' }
     })
     return { commits }
   }

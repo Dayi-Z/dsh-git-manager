@@ -158,7 +158,12 @@ body[data-ds-dark-theme] .gitcompass-panel{
 .gc-outsec-head .t{font-weight:600;font-size:11.5px}
 .gc-outsec-head .gc-chip.green{margin-left:0}
 .gc-outsec-head .gc-btn{padding:2px 9px;font-size:11px}
-.gc-outsec .gc-outrow{padding:2px 4px;border-radius:4px;transition:background .12s}
+.gc-outsec .gc-outrow{padding:2px 4px;border-radius:4px;cursor:pointer;transition:background .12s}
+.gc-outsec .gc-outrow:hover,.gc-outsec .gc-outrow.on{background:var(--gc-hover)}
+.gc-outrow .caret{display:inline-flex;opacity:.5;flex:none}
+.gc-outrow .who{font-size:10px;flex:none;opacity:.7}
+.gc-outdrill{margin:2px 0 4px 22px;padding-left:8px;border-left:2px solid var(--gc-border)}
+.gc-outsec-explain{font-size:10.5px;opacity:.55;margin-bottom:3px}
 .gc-outsec .gc-outrow:hover{background:var(--gc-hover)}
 /* 传出的更改行：sha 与标题之间留呼吸，标题单行省略 */
 .gc-outrow{display:flex;gap:8px;align-items:center;padding:2px 5px;min-width:0}
@@ -771,6 +776,23 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
       return { ref: i === -1 ? l.trim() : l.slice(0, i), subject: i === -1 ? '' : l.slice(i + 2) }
     })
   }, [stashData])
+  // 传出的更改：行内下钻（提交 → 变更文件 → 补丁），教学向"字符可打开"
+  const [outOpenSha, setOutOpenSha] = useState<string | null>(null)
+  const [outFiles, setOutFiles] = useState<Array<{ path: string; additions: number | null; deletions: number | null }>>([])
+  const [outFile, setOutFile] = useState<string | null>(null)
+  const [outPatch, setOutPatch] = useState('')
+  const [outPatchLoading, setOutPatchLoading] = useState(false)
+  const [outDrillLoading, setOutDrillLoading] = useState(false)
+  const toggleOut = async (sha: string): Promise<void> => {
+    if (outOpenSha === sha) { setOutOpenSha(null); setOutFile(null); setOutPatch(''); return }
+    setOutOpenSha(sha); setOutFile(null); setOutPatch(''); setOutDrillLoading(true)
+    try { const r = await api.commitFiles(path, sha); setOutFiles(r.files) } catch { setOutFiles([]) } finally { setOutDrillLoading(false) }
+  }
+  const openOutPatch = async (sha: string, file: string): Promise<void> => {
+    if (outFile === file) { setOutFile(null); setOutPatch(''); return }
+    setOutFile(file); setOutPatch(''); setOutPatchLoading(true)
+    try { const r = await api.commitPatch(path, sha, file); setOutPatch(r.patch) } catch { setOutPatch('') } finally { setOutPatchLoading(false) }
+  }
 
   const act = async (kind: string, fn: () => Promise<unknown>): Promise<void> => {
     setBusy(kind)
@@ -925,10 +947,37 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
               <Icon name="globe" size={11} />{t('changes.pushApi')}
             </button>
           </div>
+          <div className="gc-outsec-explain">{t('outgoing.explain')}</div>
           {outCommits.map((c) => (
-            <div className="gc-outrow" key={c.sha}>
-              <span className="sha">{c.sha.slice(0, 7)}</span>
-              <span className="sub" title={c.subject}>{c.subject}</span>
+            <div key={c.sha}>
+              <div
+                className={`gc-outrow${outOpenSha === c.sha ? ' on' : ''}`}
+                title={`${c.author} · ${c.date.slice(0, 10)}\n${c.subject}\n${t('outgoing.rowHint')}`}
+                onClick={() => { void toggleOut(c.sha) }}
+              >
+                <span className="caret"><Icon name={outOpenSha === c.sha ? 'chevron-down' : 'chevron-right'} size={10} /></span>
+                <span className="sha">{c.sha}</span>
+                <span className="sub">{c.subject}</span>
+                <span className="gc-muted who">{c.author}</span>
+              </div>
+              {outOpenSha === c.sha ? (
+                <div className="gc-outdrill">
+                  {outDrillLoading ? <div className="gc-muted" style={{ fontSize: 11 }}>{t('common.loading')}</div> : null}
+                  {!outDrillLoading && outFiles.length === 0 ? <div className="gc-muted" style={{ fontSize: 11 }}>{t('outgoing.noFiles')}</div> : null}
+                  {outFiles.map((f) => (
+                    <div key={f.path}>
+                      <div className="gc-row" style={{ padding: '1px 0' }}>
+                        <span className="gc-file" style={{ cursor: 'pointer', fontSize: 11 }} title={f.path} onClick={() => { void openOutPatch(c.sha, f.path) }}>{f.path.split('/').pop()}</span>
+                        <span className="gc-path">{f.path.split('/').slice(0, -1).join('/')}</span>
+                        <span style={{ flex: 1 }} />
+                        {f.additions !== null ? <span className="gc-numstat">+{f.additions}</span> : null}
+                        {f.deletions !== null ? <span className="gc-numstat del">−{f.deletions}</span> : null}
+                      </div>
+                      {outFile === f.path ? <DiffView patch={outPatch} loading={outPatchLoading} /> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>

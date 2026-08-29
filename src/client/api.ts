@@ -174,7 +174,7 @@ export class GitcompassApi {
     return call('/gitu/review-file', { path, file })
   }
   /** 传出的更改：@{u}..HEAD 未推送提交（无上游 → 空数组）。 */
-  outgoing(path: string): Promise<{ commits: Array<{ sha: string; subject: string }> }> {
+  outgoing(path: string): Promise<{ commits: Array<{ sha: string; subject: string; author: string; date: string }> }> {
     return call('/gitu/outgoing', { path })
   }
   /** 丢弃单文件本地更改（未跟踪 = 删除文件）。 */
