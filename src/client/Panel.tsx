@@ -152,9 +152,17 @@ body[data-ds-dark-theme] .gitcompass-panel{
 .gc-changes-bar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:3px 5px}
 .gc-changes-bar .gc-btn{padding:3px 9px}
 .gc-changes-bar .sep{width:1px;height:16px;background:var(--gc-border);flex:none;margin:0 2px}
+/* 传出的更改：组合卡片容器（头部行 + 提交行），与面板其余区块同一气质 */
+.gc-outsec{margin-top:10px;border:1px solid var(--gc-border);border-radius:8px;padding:6px 8px;background:var(--gc-bg-soft)}
+.gc-outsec-head{display:flex;align-items:center;gap:6px;color:var(--gc-accent);margin-bottom:2px}
+.gc-outsec-head .t{font-weight:600;font-size:11.5px}
+.gc-outsec-head .gc-chip.green{margin-left:0}
+.gc-outsec-head .gc-btn{padding:2px 9px;font-size:11px}
+.gc-outsec .gc-outrow{padding:2px 4px;border-radius:4px;transition:background .12s}
+.gc-outsec .gc-outrow:hover{background:var(--gc-hover)}
 /* 传出的更改行：sha 与标题之间留呼吸，标题单行省略 */
 .gc-outrow{display:flex;gap:8px;align-items:center;padding:2px 5px;min-width:0}
-.gc-outrow .sha{flex:none}
+.gc-outrow .sha{flex:none;font-family:var(--gc-mono);font-size:10px;opacity:.72}
 .gc-outrow .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.85}
 /* 贮藏库：紧凑行内列表 */
 .gc-stashlist{border:1px solid var(--gc-border);border-radius:6px;padding:4px 6px;margin:0 0 6px;background:var(--gc-bg-soft);display:flex;flex-direction:column;gap:1px}
@@ -904,22 +912,25 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
         )
       })}
       {outCommits.length > 0 ? (
-        <div className="gc-section" style={{ marginTop: 10 }}>
-          <div className="head">{t('changes.outgoing')}（{outCommits.length}）</div>
+        <div className="gc-outsec">
+          <div className="gc-outsec-head">
+            <Icon name="arrow-up" size={12} />
+            <span className="t">{t('changes.outgoing')}</span>
+            <span className="gc-chip green">{outCommits.length}</span>
+            <span style={{ flex: 1 }} />
+            <button className="gc-btn primary" disabled={busy !== null} onClick={() => act('push', () => api.push(path))}>
+              <Icon name="arrow-up" size={11} />{t('changes.push')} ↑{outCommits.length}
+            </button>
+            <button className="gc-btn" disabled={busy !== null} title={t('changes.pushApiHint')} onClick={() => act('apipush', () => api.apiPush(path))}>
+              <Icon name="globe" size={11} />{t('changes.pushApi')}
+            </button>
+          </div>
           {outCommits.map((c) => (
             <div className="gc-outrow" key={c.sha}>
-              <span className="sha">{c.sha}</span>
+              <span className="sha">{c.sha.slice(0, 7)}</span>
               <span className="sub" title={c.subject}>{c.subject}</span>
             </div>
           ))}
-          <div className="gc-row" style={{ marginTop: 4 }}>
-            <button className="gc-btn primary" disabled={busy !== null} onClick={() => act('push', () => api.push(path))}>
-              <Icon name="arrow-up" size={12} />{t('changes.push')} ↑{outCommits.length}
-            </button>
-            <button className="gc-btn" disabled={busy !== null} title={t('changes.pushApiHint')} onClick={() => act('apipush', () => api.apiPush(path))}>
-              <Icon name="globe" size={12} />{t('changes.pushApi')}
-            </button>
-          </div>
         </div>
       ) : null}
     </div>
