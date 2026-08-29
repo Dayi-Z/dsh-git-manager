@@ -8,6 +8,7 @@
 import { realpath, readFile, writeFile } from 'node:fs/promises'
 import { existsSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { ghApi, repoFromUrl } from './github-service.ts'
@@ -758,15 +759,30 @@ export class GitService {
     }
   }
 
-  /** 单文件 → GitHub blob → tree 条目。文本内容经 UTF-8 无损回编码；含 NUL 的二进制不支持。 */
+  /** 原始字节级 blob 读取（runner 的 stdout 是文本管道，二进制会被破坏）。
+   *  走 child_process 直连 git，Buffer 收集后 base64——文本与二进制同一条路。 */
+  private gitBlobBase64(canonical: string, spec: string, file: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn('git', ['cat-file', 'blob', spec], { cwd: canonical, windowsHide: true })
+      const chunks: Buffer[] = []
+      let size = 0
+      child.stdout.on('data', (c: Buffer) => {
+        size += (c as Buffer).length
+        if (size > 48 * 1024 * 1024) { child.kill(); reject(new Error(`文件超过 48MB，暂不支持 API 通道：${file}`)); return }
+        chunks.push(c as Buffer)
+      })
+      child.on('error', (e) => reject(new Error(`git cat-file 启动失败：${String(e)}`)))
+      child.on('close', (code) => code === 0 ? resolve(Buffer.concat(chunks).toString('base64')) : reject(new Error(`git cat-file 失败：${file}`)))
+    })
+  }
+
+  /** 单文件 → GitHub blob → tree 条目。buffer 级读取 + base64 上传，文本与二进制同路。 */
   private async apiBlobEntry(repoPath: string, canonical: string, sha: string, file: string): Promise<{ path: string; mode: string; sha: string | null }> {
     const ls = await this.runner.run(['ls-tree', sha, '--', file], canonical)
     const m = /^(\d+) blob [0-9a-f]+\t/.exec(ls.stdout)
     const mode = m ? m[1] : '100644'
-    const cat = await this.runner.run(['cat-file', 'blob', `${sha}:${file}`], canonical)
-    if (cat.exitCode !== 0) throw new Error(`git cat-file 失败：${file}`)
-    if (cat.stdout.includes('\u0000')) throw new Error(`二进制文件暂不支持 API 通道：${file}`)
-    const blob = await ghApi<{ sha: string }>('POST', `${repoPath}/git/blobs`, { content: Buffer.from(cat.stdout, 'utf8').toString('base64'), encoding: 'base64' })
+    const content = await this.gitBlobBase64(canonical, `${sha}:${file}`, file)
+    const blob = await ghApi<{ sha: string }>('POST', `${repoPath}/git/blobs`, { content, encoding: 'base64' })
     return { path: file, mode, sha: blob.sha }
   }
 
