@@ -4,3 +4,6 @@
 *.log
 .DS_Store
 *.tsbuildinfo
+
+# 打包产物（发布走 GitHub Release 资产）
+*.tgz

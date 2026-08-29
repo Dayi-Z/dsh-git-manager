@@ -599,9 +599,11 @@ export class GitService {
     return { ok: true, output: run.stdout }
   }
 
-  /** 上游存在但未推送的提交（@{u}..HEAD）；无上游或无提交时为空数组。 */
+  /** 上游存在但未推送的提交（@{u}..HEAD）；无上游、上游不可解析（悬空跟踪引用）或无提交时为空数组。 */
   async outgoing(path: string): Promise<{ commits: Array<{ sha: string; subject: string; author: string; date: string }> }> {
     const canonical = await this.requireWorkspace(path)
+    const verify = await this.runner.run(['rev-parse', '--verify', '-q', '@{u}'], canonical)
+    if (verify.exitCode !== 0) return { commits: [] }
     const run = await this.runner.run(['log', '@{u}..HEAD', '--format=%h%x1f%an%x1f%aI%x1f%s'], canonical)
     if (run.exitCode !== 0) return { commits: [] }
     const commits = run.stdout.split('\n').filter((l) => l.trim() !== '').map((l) => {
@@ -682,10 +684,26 @@ export class GitService {
         if (upstreamRef !== '') await this.runner.run(['update-ref', `refs/remotes/${upstreamRef}`, apiHead], canonical)
         return { ok: true, output: '远端已与本地一致（up to date）' }
       }
+      // 归一化对齐：远端 sha 在本地不存在（GitHub 端 UTC 重建改写了哈希字节）时，
+      // 用"树孪生"在本地找回远端顶点的等价提交——归一化不改写 tree 对象。
+      let baseLocal = apiHead
+      const localHasApiHead = (await this.runner.run(['cat-file', '-e', `${apiHead}^{commit}`], canonical)).exitCode === 0
+      if (!localHasApiHead) {
+        const remoteTree = (await ghApi<{ tree: { sha: string } }>('GET', `${repoPath}/git/commits/${apiHead}`)).tree.sha
+        const cand = await this.runner.run(['log', '--format=%H %T', '-n', '500', 'HEAD'], canonical)
+        const twin = cand.stdout.split('\n').map((l) => l.trim().split(/\s+/)).find((p) => p.length === 2 && p[1] === remoteTree)
+        if (!twin) return { ok: false, output: '', error: { code: 'diverged', message: '远端顶点在本地无对应提交（归一化后历史分叉），快进式 API 推送不适用' } }
+        baseLocal = twin[0]
+        if (baseLocal === head) {
+          // 远端内容 == 本地 HEAD（纯归一化差异）→ 视为已同步；跟踪引用必须指向本地合法 sha
+          if (upstreamRef !== '') await this.runner.run(['update-ref', `refs/remotes/${upstreamRef}`, head], canonical)
+          return { ok: true, output: `远端已与本地内容一致（GitHub 归一化 sha ${apiHead.slice(0, 7)} ↔ 本地孪生 ${head.slice(0, 7)}）` }
+        }
+      }
       let apiTree = (await ghApi<{ tree: { sha: string } }>('GET', `${repoPath}/git/commits/${apiHead}`)).tree.sha
       // 待推提交（旧→新），完整元数据逐字段保留。
       // FIELD 紧跟 %H，REC 作整条记录终止符——split(REC) 后每条记录 = sha⒟an⒟ae⒟…⒟message。
-      const log = await this.runner.run(['log', '--reverse', `--format=%H${FIELD}%an${FIELD}%ae${FIELD}%aI${FIELD}%cn${FIELD}%ce${FIELD}%cI${FIELD}%B${REC}`, `${apiHead}..HEAD`], canonical)
+      const log = await this.runner.run(['log', '--reverse', `--format=%H${FIELD}%an${FIELD}%ae${FIELD}%aI${FIELD}%cn${FIELD}%ce${FIELD}%cI${FIELD}%B${REC}`, `${baseLocal}..HEAD`], canonical)
       if (log.exitCode !== 0) return { ok: false, output: '', error: { code: 'log-failed', message: log.stderr.trim() || 'git log failed' } }
       // git log 在每条目后补一个换行 → 除首条外每条记录以 \n 开头：只剥前导换行，
       // 保留消息尾部的换行（sha 保真）。之后 REC 分割、FIELD 解析。
@@ -730,7 +748,11 @@ export class GitService {
         if (upstreamRef !== '') await this.runner.run(['update-ref', `refs/remotes/${upstreamRef}`, apiHead], canonical)
         return { ok: true, output: `API 推送成功（${notes.length} 个提交，sha 与本地完全一致）\n${notes.join('\n')}` }
       }
-      return { ok: true, output: `API 推送完成（${notes.length} 个提交）。注意：GitHub 端归一化使远端 sha 与本地不同（远端 ${apiHead.slice(0, 7)}），网络恢复后建议 git pull --rebase 对齐。\n${notes.join('\n')}` }
+      // 归一化分叉：远端内容 == 本地 HEAD，但远端 sha 本地永远不存在。
+      // 跟踪引用指向本地 HEAD（合法对象、语义为"远端已含此内容"）；真 fetch 会用
+      // 可解析的远端对象覆盖它。指向远端 sha 会制造悬空引用 → 全部 @{u}..HEAD 计算爆雷。
+      if (upstreamRef !== '') await this.runner.run(['update-ref', `refs/remotes/${upstreamRef}`, head], canonical)
+      return { ok: true, output: `API 推送完成（${notes.length} 个提交）。GitHub 端归一化：远端 ${apiHead.slice(0, 7)} ↔ 本地孪生 ${head.slice(0, 7)}（内容逐字节等价）。\n${notes.join('\n')}` }
     } catch (e) {
       return { ok: false, output: notes.join('\n'), error: { code: 'api-push-failed', message: e instanceof Error ? e.message : String(e) } }
     }
