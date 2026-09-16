@@ -73,7 +73,7 @@ The plugin never claims a surface the host already owns:
 
 The detection is a runtime probe (`ctx.get('betterSidebar')`), so better-sidebar stays an *optional* peer: no hard dependency, no build-time import of its types, and a failed registration degrades to the standalone card instead of losing the panel. It can be overruled with `localStorage['gm.host'] = 'dock' | 'tab'` (default: auto).
 
-The panel also **follows the session's workspace**: it resolves the cwd of the session it belongs to (the tab's `scope.cwd`, else the session id, else the active session), matches it against the known workspaces on a path boundary, and re-selects the repository whenever that session moves — while never overriding a repository you picked by hand.
+The panel also **follows the session's workspace**: it resolves the cwd of the session it belongs to (the tab's `scope.cwd`, else the active session), and re-selects the repository whenever you switch sessions — **adding it to the list first if it was never seen** (the host walks up to the innermost repository root, so a session sitting in a nested repo gets that repo rather than the workspace containing it). A repository you picked by hand is never overridden.
 
 ## Development
 

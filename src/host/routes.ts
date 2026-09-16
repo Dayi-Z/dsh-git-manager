@@ -8,7 +8,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { access, realpath } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { GitError, WorkspaceEntry } from '../core/types.ts'
 import type { GitService } from './git-service.ts'
@@ -67,6 +67,19 @@ function boolField(payload: unknown, key: string): boolean | null {
 
 const BAD_REQUEST: GitError = { code: 'bad-request', message: 'malformed request' }
 const GIT_MARK = '.git'
+
+/** 从某个目录向上找包含 .git 的仓库根（最多 12 层）。找不到返回 null。
+ *  用 existsSync 而不是 access：这条路径在每个会话切换时都会走一遍，同步判断足够快。 */
+function gitRootOf(start: string): string | null {
+  let current = start
+  for (let i = 0; i < 12; i++) {
+    if (existsSync(join(current, GIT_MARK))) return current
+    const parent = dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+  return null
+}
 
 async function listGitWorkspaces(ctx: Context): Promise<WorkspaceEntry[]> {
   const entries = new Map<string, WorkspaceEntry>()
@@ -176,8 +189,14 @@ export function route(services: Services) {
         return wrap(async () => {
           let canonical: string
           try { canonical = await realpath(p) } catch { throw Object.assign(new Error('路径不存在'), { gitError: { code: 'bad-request', message: 'path not found' } }) }
-          if (!existsSync(join(canonical, GIT_MARK))) throw Object.assign(new Error('该目录不是 git 仓库（缺 .git）'), { gitError: { code: 'bad-request', message: 'not a git repo' } })
-          shelfAdd({ path: canonical, title: canonical.split(/[\\/]/).pop() })
+          // 会话的 cwd 往往在仓库**里面**（子目录），直接要求它有 .git 会把绝大多数
+          // 会话挡在门外。向上找到仓库根再收录——面板按路径边界匹配，子目录照样命中。
+          const root = gitRootOf(canonical)
+          if (root === null) throw Object.assign(new Error('该目录不在任何 git 仓库里（向上找不到 .git）'), { gitError: { code: 'bad-request', message: 'not a git repo' } })
+          // 已经是注册工作区就不要往插件货架上再塞一条重复项。
+          if (!ctx.workspaceRegistry.list().some((w) => w.path === root)) {
+            shelfAdd({ path: root, title: root.split(/[\\/]/).pop() })
+          }
           return await listGitWorkspaces(ctx)
         })
       }

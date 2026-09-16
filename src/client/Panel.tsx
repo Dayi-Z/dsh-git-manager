@@ -1582,7 +1582,16 @@ class PanelErrorBoundary extends Component<{ children: ReactNode }, { error: Err
  *  可选字段表达，面板本身不认识任何一个宿主。 */
 export interface CompassPanelProps {
   api: GitManagerApi
-  sessions: { list: { getSnapshot(): { current?: string; byId: Record<string, { cwd?: string }> }; subscribe(fn: () => void): () => void } }
+  sessions: {
+    list: { getSnapshot(): { current?: string; byId: Record<string, { cwd?: string }> }; subscribe(fn: () => void): () => void }
+    /**
+     * DSH 的"当前会话"指针。**必须看它，不能只看 list**：`list.subscribe` 只在
+     * 会话列表本身变化（新增/删除/改标题）时通知，**切换会话不会触发它**——
+     * 这正是"切到别的会话时面板不跟随"的原因（实测：切会话后 list 的回调一次
+     * 都没跑，而 selection 的 snapshot 已经指向新会话）。
+     */
+    selection?: { getSnapshot(): { sessionId?: string }; subscribe(fn: () => void): () => void }
+  }
   /** 宿主所在会话的 cwd（better-sidebar 页签由 `scope.cwd` 给出）。
    *  有它时按它选仓库，比"去猜当前活跃会话"准确。 */
   cwd?: string
@@ -1624,16 +1633,17 @@ function matchWorkspace(workspaces: WorkspaceEntry[], cwd: string): WorkspaceEnt
  * 面板不需要用户手动去下拉框里挑。
  */
 function useOwnCwd(sessions: CompassPanelProps['sessions'], sessionId: string | undefined, cwd: string | undefined): string | undefined {
+  const selection = sessions.selection
   const resolve = useCallback((): string | undefined => {
     if (cwd !== undefined && cwd !== '') return cwd
     const snapshot = sessions.list.getSnapshot()
-    if (sessionId !== undefined) {
-      const own = snapshot.byId[sessionId]?.cwd
-      if (own !== undefined && own !== '') return own
-    }
-    const current = snapshot.current
-    return current ? snapshot.byId[current]?.cwd : undefined
-  }, [sessions, sessionId, cwd])
+    // 本页签自己的会话优先；没有就取"当前选中的会话"——selection 才是权威来源，
+    // list.current 作为兜底（老版本宿主可能没有 selection）。
+    const active = sessionId ?? selection?.getSnapshot()?.sessionId ?? snapshot.current
+    if (active === undefined || active === '') return undefined
+    const own = snapshot.byId[active]?.cwd
+    return own !== undefined && own !== '' ? own : undefined
+  }, [sessions, sessionId, cwd, selection])
 
   // 存字符串而不是 store 快照：不依赖 getSnapshot 的引用稳定性
   // （useSyncExternalStore 要求它缓存，而那是宿主 store 的实现细节，
@@ -1643,8 +1653,13 @@ function useOwnCwd(sessions: CompassPanelProps['sessions'], sessionId: string | 
   useEffect(() => {
     const read = (): void => setOwn(resolve())
     read()
-    return sessions.list.subscribe(read)
-  }, [resolve, sessions])
+    const disposers = [sessions.list.subscribe(read)]
+    if (selection !== undefined) disposers.push(selection.subscribe(read))
+    // 兜底轮询：切会话是否触发通知是宿主的实现细节（这里踩过一次——list 不通知）。
+    // 每 3 秒读一个字符串，代价可以忽略，但"跟随会话"这件功能不该依赖版本行为。
+    const timer = setInterval(read, 3000)
+    return () => { clearInterval(timer); for (const d of disposers) d() }
+  }, [resolve, sessions, selection])
   return own
 }
 
@@ -1658,6 +1673,19 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
   const ownCwd = useOwnCwd(sessions, sessionId, cwd)
   /** 上一次自动选中的会话 cwd：用来区分"会话变了"和"用户自己选了别的"。 */
   const appliedCwd = useRef<string | undefined>(undefined)
+  // 诊断：把"本面板认定的会话工作区"和它的更新次数写到 body 上——"换会话不跟随"
+  // 这类问题一眼就能看出是 store 没通知、还是 cwd 取不到。
+  useEffect(() => {
+    try {
+      document.body.dataset.gitmCwd = ownCwd ?? ''
+      document.body.dataset.gitmCwdReads = String((Number(document.body.dataset.gitmCwdReads) || 0) + 1)
+
+    } catch { /* noop */ }
+  }, [ownCwd, sessions])
+  /** 已经尝试过自动收录的会话 cwd：每个只试一次，失败不重试。 */
+  const triedAdd = useRef<Set<string>>(new Set())
+  /** 仓库清单是否已经到过一次：没到之前不要去"自动收录"，否则首帧会误判。 */
+  const [wsLoaded, setWsLoaded] = useState(false)
   const [tab, setTab] = useState<TabId>('changes')
   const [ghTab, setGhTab] = useState<GithubTab>('prs')
   const [flow, setFlow] = useState<FlowSnapshot | null>(null)
@@ -1712,26 +1740,50 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
   }, [authState?.connected])
 
   useEffect(() => {
-    void api.workspaces().then(setWorkspaces).catch((e) => console.error('dsh-git-manager: workspaces', e))
+    void api.workspaces()
+      .then((ws) => { setWorkspaces(ws); setWsLoaded(true) })
+      .catch((e) => { console.error('dsh-git-manager: workspaces', e); setWsLoaded(true) })
   }, [api])
 
   /**
-   * 自动检测当前会话的工作区：会话 cwd 一变（换工作区 / 切会话 / 重开会话），
-   * 面板就切到对应的仓库。
+   * 自动检测当前会话的工作区：会话 cwd 一变（换会话 / 换工作区 / 重开），
+   * 面板就切到对应的仓库；**没收录过就自动收录一次**——否则打开别的会话时
+   * 那个仓库根本不在下拉框里，用户只能自己去"收录仓库"里手敲路径。
+   * （会话 cwd 常常是仓库里的子目录，主机会向上找到仓库根。）
    *
-   * 关键在于**记住"上次自动切到哪个 cwd"**，而不是每次依赖变化都重算：
-   * 否则用户手动选了别的仓库、或刚收录一个仓库（workspaces 变了），都会被
-   * 硬拽回会话仓库。规则是——自动检测跟随会话，但绝不对抗手动选择。
+   * 两个刹车：**记住"上次自动切到哪个 cwd"**，所以用户手动选的仓库、或刚收录
+   * 的仓库（workspaces 变了）都不会被硬拽回去；**每个 cwd 只尝试收录一次**，
+   * 像家目录这种不是仓库的 cwd 不会反复试。
    */
   useEffect(() => {
-    if (ownCwd === undefined || ownCwd === '' || workspaces.length === 0) return
+    if (ownCwd === undefined || ownCwd === '' || !wsLoaded) return
     if (appliedCwd.current === ownCwd && path !== '') return
     const match = matchWorkspace(workspaces, ownCwd)
-    if (match === undefined) return
-    appliedCwd.current = ownCwd
-    if (match.path !== path) setPath(match.path)
+    const exact = match !== undefined && normPath(match.path) === normPath(ownCwd)
+    // 只有**精确命中**才算"这个仓库已经在了"。前缀命中不算：会话 cwd 可能落在
+    // 某个已注册工作区**内部**的嵌套仓库里（例如 D:\Harness 里的某个子仓库），
+    // 那时用户要的是那个子仓库，而不是包着它的工作区。
+    if (exact) {
+      appliedCwd.current = ownCwd
+      if (match.path !== path) setPath(match.path)
+      return
+    }
+    const settle = (list: WorkspaceEntry[]): void => {
+      const best = matchWorkspace(list, ownCwd)
+      if (best !== undefined) { appliedCwd.current = ownCwd; if (best.path !== path) setPath(best.path) }
+    }
+    if (triedAdd.current.has(ownCwd)) { if (match !== undefined) settle(workspaces); return }
+    triedAdd.current.add(ownCwd)
+    // 收录请求交给宿主解析：它会向上找到最内层的仓库根，并把 cwd 是子目录的
+    // 情况也算进来。收录失败（cwd 压根不在仓库里）就退回"最长前缀匹配"。
+    void api.addRepo(ownCwd)
+      .then((ws) => { setWorkspaces(ws); settle(ws) })
+      .catch((e) => {
+        console.info('dsh-git-manager: session workspace not added —', String(e instanceof Error ? e.message : e))
+        if (match !== undefined) settle(workspaces)
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownCwd, workspaces, path])
+  }, [ownCwd, workspaces, path, wsLoaded])
 
   /** 手动收录本地仓库（嵌套仓库/未注册目录），返回值即最新合并清单。
    *  注意：Electron 不支持 window.prompt（同步抛 "prompt() is and will not

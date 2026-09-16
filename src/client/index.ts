@@ -39,6 +39,11 @@ interface PanelClientContext {
       getSnapshot(): { current?: string; byId: Record<string, { cwd?: string }> }
       subscribe(fn: () => void): () => void
     }
+    /** 当前会话指针：切会话时**只有它会通知**（list 只在列表本身变化时通知）。 */
+    selection?: {
+      getSnapshot(): { sessionId?: string }
+      subscribe(fn: () => void): () => void
+    }
   }
   locale: {
     getLocale(): { active: string }
