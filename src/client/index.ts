@@ -10,8 +10,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { Component, createElement, type ErrorInfo, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { GitManagerApi } from './api.ts'
+import { betterSidebarOf, registerSidebarTab } from './embed.tsx'
 import { initI18n } from './i18n.ts'
-import { CompassPanel } from './Panel.tsx'
+import { StandaloneCard } from './shell.tsx'
 
 /** 错误边界：渲染失败时把错误写到 DOM 标记，便于诊断（不弹白屏）。 */
 class Boundary extends Component<{ children: ReactNode }, { error: string | null }> {
@@ -31,6 +32,8 @@ class Boundary extends Component<{ children: ReactNode }, { error: string | null
 interface PanelClientContext {
   effect(fn: () => (() => void) | void, name: string): void
   inject(services: string[], fn: (scope: PanelClientContext) => void): void
+  /** cordis 的服务查询（可选服务的运行时探测，见 embed.tsx）。 */
+  get?(name: string): unknown
   sessions: {
     list: {
       getSnapshot(): { current?: string; byId: Record<string, { cwd?: string }> }
@@ -243,17 +246,20 @@ export function apply(ctx: PanelClientContext): void {
     const disposers: Array<() => void> = []
     let root: Root | null = null
 
+    const api = new GitManagerApi()
+    const host = ctx as unknown as { sessions: PanelClientContext['sessions'] }
+    let teardownDock: (() => void) | null = null
+
     const mount = (frame: HTMLElement): void => {
+      if (teardownDock !== null) return
       // 加入共享右栏 Dock（无则创建），作为一张等高卡片一上一下堆叠。
       const { dock, sync } = dockIn(frame)
       const card = dockCard(dock)
       card.dataset.gitmCol = ''
 
-      const api = new GitManagerApi()
-      const host = ctx as unknown as { sessions: PanelClientContext['sessions'] }
       try {
         root = createRoot(card)
-        root.render(createElement(Boundary, null, createElement(CompassPanel, { api, sessions: host.sessions })))
+        root.render(createElement(Boundary, null, createElement(StandaloneCard, { card, api, sessions: host.sessions })))
       } catch (error) {
         try { document.body.dataset.gitmErr = String(error instanceof Error ? error.message : error) } catch { /* noop */ }
         console.error('dsh-git-manager: mount failed', error)
@@ -264,9 +270,10 @@ export function apply(ctx: PanelClientContext): void {
       observer.observe(frame, { attributes: true, attributeFilter: ['style'], childList: true })
       sync()
 
-      disposers.push(() => {
+      teardownDock = (): void => {
         observer.disconnect()
         root?.unmount()
+        root = null
         card.remove()
         // Dock 已空：归零轨道后移除，并修剪尾部 0px 残留。
         if (dock.querySelector<HTMLElement>('[data-dsh-card]') === null) {
@@ -278,10 +285,42 @@ export function apply(ctx: PanelClientContext): void {
             frame.style.gridTemplateColumns = cur.slice(0, cur.length - over).join(' ')
           }
         }
-      })
+      }
+      // 光有 rAF 取消是不够的：fiber 销毁（HMR 重载/卸载）必须连卡片和
+      // React 根一起拆掉，否则页面上会留下孤儿面板。
+      disposers.push(() => { teardownDock?.(); teardownDock = null })
     }
 
-    disposers.push(waitForFrame(mount))
-    return () => { for (const d of disposers) d() }
-  }, 'dsh-git-manager: panel column')
+    // ── 宿主选择：better-sidebar 在场 ⇒ 做它的一个页签；不在场 ⇒ 自己撑右栏。
+    //    better-sidebar 自己拥有右栏，两种形态同时存在就是两个面板抢一个位置。──
+    let disposeTab: (() => void) | null = null
+    const adoptSidebar = (service: ReturnType<typeof betterSidebarOf>): boolean => {
+      if (service === null || disposeTab !== null) return false
+      try {
+        disposeTab = registerSidebarTab(service, { api, sessions: host.sessions })
+        return true
+      } catch (error) {
+        disposeTab = null
+        console.error('dsh-git-manager: better-sidebar tab registration failed; keeping the standalone dock', error)
+        return false
+      }
+    }
+
+    if (!adoptSidebar(betterSidebarOf(ctx))) {
+      disposers.push(waitForFrame(mount))
+      // better-sidebar 可能比本插件晚挂载：它一出现就换成页签形态并撤掉 Dock。
+      try {
+        ctx.inject(['betterSidebar'], (scope) => {
+          if (!adoptSidebar(betterSidebarOf(scope))) return
+          teardownDock?.()
+          teardownDock = null
+        })
+      } catch { /* 无 inject 能力：只用启动时的探测结果 */ }
+    }
+
+    return () => {
+      disposeTab?.()
+      for (const d of disposers) d()
+    }
+  }, 'dsh-git-manager: panel host')
 }

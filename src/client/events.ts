@@ -60,6 +60,19 @@ function getSnapshot(): GitEvent[] {
   return store
 }
 
+/** Subscribe to the host event stream from OUTSIDE React (non-hook form of
+ *  {@link useGitEvents}). Holding one subscription keeps the shared
+ *  EventSource open — that is how the better-sidebar tab badge stays live
+ *  while the panel itself is not mounted. */
+export function subscribeEvents(listener: Listener): () => void {
+  return subscribe(listener)
+}
+
+/** The current event snapshot, readable without a hook (tab badge). */
+export function snapshotEvents(): GitEvent[] {
+  return store
+}
+
 /** Subscribe to the host event stream. Returns a capped, newest-last array. */
 export function useGitEvents(limit = 100): GitEvent[] {
   const events = useSyncExternalStore(subscribe, getSnapshot)

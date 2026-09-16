@@ -89,7 +89,13 @@ export const css = `
 /* ── Header: repo picker + the panel's own chrome ──────────────────────── */
 
 .gm-head{position:relative;display:flex;flex-direction:column;gap:6px;padding:8px 8px 8px 12px;border-bottom:1px solid var(--gm-hairline)}
-.gm-repo{display:flex;gap:4px;align-items:center;min-width:0}
+/* 头部第一行：收起把手（可选）+ 仓库选择器。把手只在独立 Dock 形态出现。 */
+.gm-headrow{display:flex;align-items:center;gap:4px;min-width:0}
+.gm-repo{flex:1;display:flex;gap:4px;align-items:center;min-width:0}
+/* 收起态（独立 Dock）：只剩头部条，高度交还给 Dock。宿主同时会停掉轮询
+   （setPanelActive），所以被隐藏的视图不会在后台继续打 git。 */
+.gm-panel.gm-collapsed{height:auto;min-height:0}
+.gm-panel.gm-collapsed > :not(.gm-head){display:none}
 .gm-repo select{flex:1;min-width:0;height:26px;padding:0 6px;border:1px solid var(--gm-border);border-radius:6px;background:var(--gm-bg);font:var(--dsw-font-xxs-12);transition:border-color var(--gm-t) var(--gm-ease)}
 .gm-repo select option{background:var(--gm-bg);color:var(--gm-fg)}
 .gm-repo select:focus{outline:none;border-color:var(--gm-ring)}

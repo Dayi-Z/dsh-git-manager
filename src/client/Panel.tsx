@@ -60,14 +60,39 @@ function setPullRebaseFlag(v: boolean): void {
   try { localStorage.setItem('gm.pullRebase', v ? '1' : '0') } catch { /* no storage */ }
 }
 
+// ---------------------------------------------------------------------------
+// 面板活跃态：宿主（独立 Dock 的收起态 / better-sidebar 页签的 visible）告诉
+// 面板"现在没人在看"，usePoll 就停止发请求——收起的面板不该在后台一直打 git。
+// 恢复活跃时广播事件，所有 usePoll 立刻补一次，而不是干等一个轮询周期。
+// ---------------------------------------------------------------------------
+
+const ACTIVE_EVENT = 'gm:active'
+let panelActive = true
+
+/** 由宿主调用（独立 Dock 的收起/展开、better-sidebar 页签的 visible）。 */
+export function setPanelActive(active: boolean): void {
+  if (panelActive === active) return
+  panelActive = active
+  if (active) {
+    try { window.dispatchEvent(new Event(ACTIVE_EVENT)) } catch { /* noop */ }
+  }
+}
+
 function usePoll<T>(fn: () => Promise<T>, deps: unknown[], intervalMs: number): { data: T | null; error: string | null; reload: () => void } {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
   const reload = useCallback(() => setTick((x) => x + 1), [])
+  // 面板重新可见 → 立刻补一次（bump tick 会重跑下面的 effect）。
+  useEffect(() => {
+    const onActive = (): void => setTick((x) => x + 1)
+    window.addEventListener(ACTIVE_EVENT, onActive)
+    return () => window.removeEventListener(ACTIVE_EVENT, onActive)
+  }, [])
   useEffect(() => {
     let alive = true
     const run = async (): Promise<void> => {
+      if (!panelActive) return
       try {
         const value = await fn()
         if (alive) { setData(value); setError(null) }
@@ -1540,7 +1565,22 @@ class PanelErrorBoundary extends Component<{ children: ReactNode }, { error: Err
   }
 }
 
-function CompassPanelInner({ api, sessions }: { api: GitManagerApi; sessions: { list: { getSnapshot(): { current?: string; byId: Record<string, { cwd?: string }> }; subscribe(fn: () => void): () => void } } }): JSX.Element {
+/** 面板的宿主契约：独立右栏 Dock 与 better-sidebar 页签共用同一份 props
+ *  （见 client/index.ts 与 client/embed.tsx），所以宿主差异只能通过这里的
+ *  可选字段表达，面板本身不认识任何一个宿主。 */
+export interface CompassPanelProps {
+  api: GitManagerApi
+  sessions: { list: { getSnapshot(): { current?: string; byId: Record<string, { cwd?: string }> }; subscribe(fn: () => void): () => void } }
+  /** 宿主所在会话的 cwd（better-sidebar 页签由 `scope.cwd` 给出）。
+   *  有它时按它选仓库，比"去猜当前活跃会话"准确。 */
+  cwd?: string
+  /** 收起态：只有独立 Dock 形态会传（页签的生命周期归 better-sidebar）。
+   *  收起时靠 CSS 只留头部，宿主负责停轮询。 */
+  collapsed?: boolean
+  onToggleCollapsed?: () => void
+}
+
+function CompassPanelInner({ api, sessions, cwd, collapsed = false, onToggleCollapsed }: CompassPanelProps): JSX.Element {
   // SSE 订阅常驻顶层：即使切到其他标签页，其他会话的提交/审批事件仍在积累，
   // 回到 Agent 标签即可看到全部历史（不因 unmount 断流）。
   const agentEvents = useGitEvents(200)
@@ -1602,9 +1642,13 @@ function CompassPanelInner({ api, sessions }: { api: GitManagerApi; sessions: { 
     void api.workspaces().then((ws) => {
       setWorkspaces(ws)
       if (ws.length > 0 && !path) {
-        const current = sessions.list.getSnapshot().current
-        const cwd = current ? sessions.list.getSnapshot().byId[current]?.cwd : undefined
-        const match = cwd ? ws.find((w) => cwd.startsWith(w.path)) : undefined
+        // 宿主给的 cwd 优先（better-sidebar 页签的 scope.cwd 就是本标签页所属
+        // 会话），否则退回"当前活跃会话"——多会话下前者才是对的。
+        const own = cwd ?? (() => {
+          const current = sessions.list.getSnapshot().current
+          return current ? sessions.list.getSnapshot().byId[current]?.cwd : undefined
+        })()
+        const match = own ? ws.find((w) => own.startsWith(w.path)) : undefined
         setPath(match?.path ?? ws[0].path)
       }
     }).catch((e) => console.error('dsh-git-manager: workspaces', e))
@@ -1662,9 +1706,22 @@ function CompassPanelInner({ api, sessions }: { api: GitManagerApi; sessions: { 
   const TAB_ICONS: Record<TabId, IconName> = { branches: 'git-branch', changes: 'diff', graph: 'commit', prs: 'git-pr', issues: 'issue', github: 'globe', agent: 'bot' }
 
   return (
-    <div className="gm-panel">
+    <div className={`gm-panel${collapsed ? ' gm-collapsed' : ''}`}>
       <div className="gm-head">
-        <div className="gm-repo">
+        <div className="gm-headrow">
+          {/* 收起把手只由独立 Dock 形态传入；better-sidebar 页签的收起在宿主手里。 */}
+          {onToggleCollapsed ? (
+            <button
+              type="button"
+              className="gm-btn sm"
+              aria-expanded={!collapsed}
+              title={collapsed ? t('panel.expand') : t('panel.collapse')}
+              onClick={onToggleCollapsed}
+            >
+              <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} size={13} />
+            </button>
+          ) : null}
+          <div className="gm-repo">
           <select value={path} title={path} onChange={(e) => { setPath(e.target.value); setTick((x) => x + 1) }}>
             {workspaces.length === 0 ? <option value="">{t('repo.none')}</option> : null}
             {workspaces.map((w) => <option key={w.path} value={w.path}>{w.title || w.path.split(/[\\/]/).pop()}</option>)}
@@ -1673,6 +1730,7 @@ function CompassPanelInner({ api, sessions }: { api: GitManagerApi; sessions: { 
           <button className="gm-btn sm" onClick={removeCurrentRepo} title={t('repo.removeCurrent')}><Icon name="trash" size={13} /></button>
           <button className="gm-btn" onClick={() => setTick((x) => x + 1)} title={t('common.refresh')}><Icon name="sync" size={12} />{t('common.refresh')}</button>
           <button className="gm-btn sm" onClick={() => setSettingsOpen(!settingsOpen)} title={t('settings.title')}><Icon name="gear" size={13} /></button>
+          </div>
         </div>
         {addOpen ? (
           <div className="gm-addrow">
@@ -1750,7 +1808,7 @@ function CompassPanelInner({ api, sessions }: { api: GitManagerApi; sessions: { 
   )
 }
 
-export function CompassPanel(props: Parameters<typeof CompassPanelInner>[0]): JSX.Element {
+export function CompassPanel(props: CompassPanelProps): JSX.Element {
   return (
     <PanelErrorBoundary>
       <CompassPanelInner {...props} />

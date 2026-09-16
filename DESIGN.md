@@ -45,6 +45,19 @@
 
 滚动条走 `scrollbar-bg-l2 / hover-l2`、::selection 用 accent-soft、focus-visible 统一 `2px solid interactive-bg-hover-accent`（offset -1px，与 better-sidebar 同一约定）。`prefers-reduced-motion` 下关闭全部动效与过渡。
 
+## 宿主形态（面板不抢别人已有的表面）
+
+面板有两种挂载形态，由**运行时探测**决定，而不是编译期依赖：
+
+- **`dsh-better-sidebar` 在场** → 注册成它的一个页签（`registerTab`），把右栏让给它。页签角标直接顶"待批准写操作数"——面板最需要被看见的状态。
+- **不在场** → 保留自己的右栏卡片，头部带收起把手；收起后只剩头部条并停止轮询。
+
+两种形态**共用同一份 `CompassPanel`**，差异只通过可选 props 表达（`cwd` / `collapsed` / `onToggleCollapsed`），面板本身不认识任何一个宿主。宿主差异全部关在 `client/embed.tsx`（better-sidebar）与 `client/shell.tsx`（独立卡片）里。
+
+推论（设计纪律）：**探测必须是软的**——`ctx.get('betterSidebar')` 返回 null 是正常路径；注册抛错要降级成独立卡片而不是丢面板；better-sidebar 的类型只以结构化子集声明，不进构建依赖。
+
+另一个推论：**隐藏 ≠ 继续跑**。面板被收起或被切走时，宿主调 `setPanelActive(false)`，`usePoll` 停发请求；重新可见时广播 `gm:active`，所有轮询立刻补一次而不是干等一个周期。
+
 ## 样式落点
 
 `src/client/styles.ts` 是唯一的表现层来源（2.0 从 Panel.tsx 里抽出，Panel.tsx 随之从 2006 行降到 1740 行）。

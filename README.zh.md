@@ -22,6 +22,7 @@
 - **面板内审批（面板权威）**：Agent 的写操作在面板中弹出审批卡片，可直接**批准**或**拒绝**；与 DSH 原生弹窗并行竞速，先到者生效。原生通道的自动拒绝（包括 approval policy 为 `never` 时的 ghost deny，例如 danger-full-access 预设自带 `never`）**不能否决**面板卡——任何审批策略下写操作都能走面板审批。面板决定一次性有效且不落盘；无面板在线时快速失败并提示打开面板（或先在面板中预批准），不再静默挂死。
 - **多语言**：自动跟随 DSH Web 界面语言（中文 / 英文）。
 - **主题**：面板不带自研调色板，颜色全部来自宿主主题令牌，因此明暗与第三方皮肤都能生效。
+- **两种宿主形态**：装了 [`dsh-better-sidebar`](https://github.com/omdsh-dev/DSH-better-sidebar) 时，面板把自己注册成它的一个页签并把右栏让给它；没装时保留自己的右栏卡片，且**可折叠**。详见下文。
 
 ## 安装
 
@@ -51,15 +52,26 @@ src/
     github-service.ts # GitHub REST 封装（Token 不离开宿主进程）
     github-auth.ts   # 设备流、DPAPI Token 加密存储、gh CLI 同步
   client/
-    index.ts         # 浏览器端入口：挂载右侧面板列
+    index.ts         # 浏览器端入口：选择宿主（better-sidebar 页签 / 独立卡片）
+    embed.tsx        # better-sidebar 页签注册（结构化类型，可选 peer）
+    shell.tsx        # 独立宿主：可折叠的右栏卡片
     Panel.tsx        # 主面板：分支 / 变更 / 图谱 / PR / 议题 / GitHub / Agent
     styles.ts        # 全部样式，建立在宿主主题令牌之上（见 DESIGN.md）
     api.ts           # /gitm/* 路由的类型化 Fetch 封装
-    events.ts        # SSE 订阅 Hook（useGitEvents）
+    events.ts        # SSE 订阅 + 页签角标共用的共享事件存储
     i18n.ts          # 中英文双语词典
     icons.tsx        # 图标唯一来源（16px 网格、1.5 笔重内联 SVG）
     graph.ts         # 提交 DAG Lane 布局算法
 ```
+
+## 宿主形态
+
+面板**不抢占宿主已经拥有的表面**：
+
+- **装了 `dsh-better-sidebar`** —— 面板注册成它的一个侧栏页签（`dsh-git-manager:panel`，标题「Git 管理」，单实例幂等），**不再**自己挂右栏。从侧栏的「新建页签」列表里打开，之后随会话持久化。页签上带**实时角标**：当前有多少个写操作在等你批准。
+- **没装 `dsh-better-sidebar`** —— 面板保留自己的右栏卡片，头部多一个收起把手。收起后只剩头部条，并**停止全部轮询**（不会在后台继续打 git），状态落 localStorage。
+
+探测是运行时的（`ctx.get('betterSidebar')`），所以 better-sidebar 始终只是**可选 peer**：没有硬依赖、构建期不 import 它的类型；注册失败也只降级成独立卡片，不会把面板弄丢。
 
 ## 开发
 

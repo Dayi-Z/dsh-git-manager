@@ -8,6 +8,9 @@ type Dict = Record<string, string>
 
 const zh: Dict = {
   'panel.title': 'Git 管理',
+  'panel.desc': '变更 / 提交 / 推送 / PR / 议题 与代理活动',
+  'panel.collapse': '收起面板',
+  'panel.expand': '展开面板',
   'repo.pick': '选择仓库',
   'repo.none': '无 git 仓库（打开一个 git 工作区）',
   'flow.branch': '分支',
@@ -250,6 +253,9 @@ const zh: Dict = {
 
 const en: Dict = {
   'panel.title': 'Git Manager',
+  'panel.desc': 'Changes, commit, push, PRs, issues and agent activity',
+  'panel.collapse': 'Collapse panel',
+  'panel.expand': 'Expand panel',
   'repo.pick': 'Pick repository',
   'repo.none': 'No git repo (open a git workspace)',
   'flow.branch': 'Branch',
