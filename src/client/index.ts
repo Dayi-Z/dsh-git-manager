@@ -58,15 +58,23 @@ let frameEl: HTMLElement | null = null
 // sessionStorage 记录"已为该 rev 重载过"，防止循环。
 // ---------------------------------------------------------------------------
 
-/** dsh-client-modules 把插件的浏览器半打包成一个合并 URL：
- *  `/plugins/??<id>/client.js[,<id2>/client.js]&rev=<sha1-12>`。因此 rev 不在
- *  `client.js` 之后直接出现——它跟在整个 id 列表后面。匹配时必须允许中间隔
- *  着其它插件的条目，否则这个自愈永远拿不到 rev（历史实现就是这样静默失效的）。 */
-const REV_RE = /\/plugins\/\?\?[^"']*dsh-git-manager\/client\.js[^"']*[?&]rev=([a-f0-9]+)/
+/** 插件浏览器半的 script URL 有两种形态（dsh-client-modules 的 comboUrl 与
+ *  单条 form），而且两种都要认它们在 innerHTML 里的样子——属性值中的 `&` 会
+ *  被序列化成 `&amp;`，所以 `rev=` 前面可能是 `&amp;` 而不是 `&`：
+ *    a) 单条：`/plugins/??dsh-git-manager/client.js&rev=<rev>`
+ *    b) 合并：`/plugins/??<id>,…,dsh-git-manager/client.js,…&rev=<rev>`
+ *  历史实现只写了 `client.js?rev=`，上面两种一种都匹配不到，于是这个自愈
+ *  从未生效过（改了面板仍要用户手动 Ctrl+F5）。优先取单条 form：合并 form 的
+ *  rev 会因为**别的**插件重建而变化，拿它当基准会造成无关重载。 */
+const REV_SELF_RE = /\/plugins\/\?\?dsh-git-manager\/client\.js[?&](?:amp;)?rev=([a-f0-9]+)/
+const REV_BATCH_RE = /\/plugins\/\?\?[^"']*dsh-git-manager\/client\.js[^"']*[?&](?:amp;)?rev=([a-f0-9]+)/
+
+function revOf(html: string): string {
+  return REV_SELF_RE.exec(html)?.[1] ?? REV_BATCH_RE.exec(html)?.[1] ?? ''
+}
 
 function currentRev(): string {
-  const m = document.documentElement.innerHTML.match(REV_RE)
-  return m?.[1] ?? ''
+  return revOf(document.documentElement.innerHTML)
 }
 
 function selfHeal(): void {
@@ -75,7 +83,7 @@ function selfHeal(): void {
   void fetch('/', { cache: 'no-store' })
     .then((r) => r.text())
     .then((html) => {
-      const latest = html.match(REV_RE)?.[1] ?? ''
+      const latest = revOf(html)
       if (latest === '' || latest === mine) return
       let reloadedFor = ''
       try { reloadedFor = sessionStorage.getItem('gm.selfheal-rev') ?? '' } catch { /* noop */ }
