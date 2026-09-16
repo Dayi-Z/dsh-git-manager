@@ -273,7 +273,10 @@ export const css = `
 .gm-stashlist .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Folder rows in the tree view */
-.gm-folder{display:flex;gap:5px;align-items:center;min-height:24px;padding:2px 6px;border-radius:6px;font:var(--dsw-font-xxs-12);cursor:pointer}
+/* 目录行与文件行**只差结构**（折叠箭头 / 文件夹图标 / 计数 / 缩进），不差排版：
+   文件名是 w500、目录名原本是 w400，同一列里一眼就看得出"有一行不太一样"。
+   两者统一同一档字体。 */
+.gm-folder{display:flex;gap:5px;align-items:center;min-height:24px;padding:2px 6px;border-radius:6px;font:var(--dsw-font-xxs-strong-12);cursor:pointer}
 .gm-folder:hover{background:var(--gm-hover)}
 
 /* ── Diffs ─────────────────────────────────────────────────────────────── */

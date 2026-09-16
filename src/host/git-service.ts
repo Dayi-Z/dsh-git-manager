@@ -636,7 +636,9 @@ export class GitService {
     }
     const text = await readFile(join(canonical, name), 'utf8')
     if (text.includes('\u0000')) return { ok: true, output: `${header}@@ binary file @@\n` }
-    const lines = text.split('\n')
+    // CRLF 文件按 \n 切开后每行尾部会留一个 \r，在 pre 里会显成一个多余字符。
+    // 合成 diff 只用于阅读，去掉它。
+    const lines = text.split('\n').map((l) => l.replace(/\r$/, ''))
     const shown = lines.slice(0, UNTRACKED_MAX_LINES)
     const body = shown.map((l) => `+${l}`).join('\n')
     const rest = lines.length - shown.length

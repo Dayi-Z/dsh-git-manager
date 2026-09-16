@@ -604,9 +604,13 @@ function Changes({ api, path, flow }: { api: GitManagerApi; path: string; flow: 
   const lines = useMemo(() => (data?.output ?? '').split('\n').filter((l) => l.trim() !== ''), [data])
   const rows = useMemo<StatusRow[]>(() => lines.map((l) => {
     const code = l.slice(0, 2)
-    const file = l.slice(3)
+    // git 对"整个未跟踪的目录"只报一条，且结尾带斜杠（`?? caveman/`）。
+    // 带斜杠时 newPath.split('/').pop() 是空串——于是那一行只有状态字母、没有名字，
+    // 在一列文件名里看着就像"字体不对"。这里统一去掉尾斜杠。
+    const file = l.slice(3).replace(/\/+$/, '')
     const i = file.indexOf(' -> ')
-    return { file, x: code[0] ?? ' ', y: code[1] ?? ' ', untracked: code === '??', newPath: i === -1 ? file : file.slice(i + 4) }
+    const renamed = i === -1 ? file : file.slice(i + 4)
+    return { file, x: code[0] ?? ' ', y: code[1] ?? ' ', untracked: code === '??', newPath: renamed.replace(/\/+$/, '') }
   }), [lines])
   // 分组遵循 Trae：已暂存 / 更改（未暂存 + 未跟踪合并；未跟踪状态字母显示 U）
   const staged = useMemo(() => rows.filter((r) => !r.untracked && r.x !== ' ' && r.x !== '?'), [rows])
