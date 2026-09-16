@@ -163,12 +163,12 @@ export const css = `
 .gm-row{display:flex;gap:6px;align-items:center;min-height:26px;padding:3px 8px;border-radius:6px}
 .gm-row:hover{background:var(--gm-hover)}
 .gm-file{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--gm-fg)}
-.gm-path{max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--gm-fg-3);font:var(--dsw-font-xxxs-11);font-family:var(--gm-mono)}
+.gm-path{max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--gm-fg-3);font:var(--dsw-font-xxxs-11)}
 .gm-muted{color:var(--gm-fg-3)}
 .gm-err{color:var(--gm-red);padding:8px 10px;white-space:pre-wrap;word-break:break-word}
 .gm-caret{flex:none;color:var(--gm-fg-3)}
 .gm-fic{flex:none;color:var(--gm-fg-3)}
-.gm-drill .gm-file{font-family:var(--gm-mono);font-size:11px}
+.gm-drill .gm-file{font:var(--dsw-font-xxxs-11)}
 .gm-numstat{font-family:var(--gm-mono);font-size:11px;color:var(--gm-green)}
 .gm-numstat.del{color:var(--gm-red)}
 .gm-lane{display:inline-block;width:12px}
@@ -273,7 +273,7 @@ export const css = `
 .gm-stashlist .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Folder rows in the tree view */
-.gm-folder{display:flex;gap:5px;align-items:center;min-height:24px;padding:2px 6px;border-radius:6px;font-family:var(--gm-mono);font-size:11px;cursor:pointer}
+.gm-folder{display:flex;gap:5px;align-items:center;min-height:24px;padding:2px 6px;border-radius:6px;font:var(--dsw-font-xxs-12);cursor:pointer}
 .gm-folder:hover{background:var(--gm-hover)}
 
 /* ── Diffs ─────────────────────────────────────────────────────────────── */

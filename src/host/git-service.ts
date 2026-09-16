@@ -5,7 +5,7 @@
  * @module dsh-git-manager/host/git-service
  */
 
-import { realpath, readFile, writeFile } from 'node:fs/promises'
+import { realpath, readFile, stat, writeFile } from 'node:fs/promises'
 import { existsSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -13,6 +13,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { ghApi, repoFromUrl } from './github-service.ts'
 import type { BranchesView, BranchRow, GitError, GraphCommit, GraphTips, GraphView, OpResult } from '../core/types.ts'
+
+/** 未跟踪文件合成 diff 的上限：行数与字节数各一道，防止一个大文件拖垮面板。 */
+const UNTRACKED_MAX_LINES = 2000
+const UNTRACKED_MAX_BYTES = 512 * 1024
 
 export interface GitRunResult {
   exitCode: number | null
@@ -593,11 +597,51 @@ export class GitService {
     if (name === '' || name.startsWith('/') || name === '..' || name.includes('/../')) {
       return { ok: false, output: '', error: { code: 'invalid-file', message: 'invalid file path' } }
     }
-    const run = await this.runner.run(['diff', 'HEAD', '--', name], canonical)
+    // 未跟踪文件：`git diff` 对它本来就没什么可输出（它比的是工作区与索引），
+    // 面板于是显示"无变更"——可用户眼前明明是一个新文件。未跟踪 = 整份文件都是
+    // 新增，这里直接合成一份 diff。
+    const others = await this.runner.run(['ls-files', '--others', '--exclude-standard', '--', name], canonical)
+    if (others.exitCode === 0 && others.stdout.split('\n').some((l) => l.trim() !== '')) {
+      return await this.syntheticAddDiff(canonical, name)
+    }
+    // 全新仓库没有 HEAD：`git diff HEAD` 会直接 fatal（面板会把它显示成"二进制
+    // 文件或超出大小限制"，而宿主日志里刷的其实是 'ambiguous argument HEAD'）。
+    // 没有 HEAD 就降级成"工作区 vs 索引"。
+    const head = await this.runner.run(['rev-parse', '--verify', '-q', 'HEAD'], canonical)
+    const run = await this.runner.run(head.exitCode === 0 ? ['diff', 'HEAD', '--', name] : ['diff', '--', name], canonical)
     if (run.exitCode !== 0) {
       return { ok: false, output: '', error: { code: 'diff-failed', message: run.stderr.trim() || 'git diff failed' } }
     }
     return { ok: true, output: run.stdout }
+  }
+
+  /**
+   * 未跟踪文件的合成 diff：整份内容都当作新增行。
+   *
+   * 目录（git 会把未跟踪目录整体报成一条）与二进制文件给一句**说明**，
+   * 而不是把"读不了"伪装成"加载失败"——两者对用户的含义完全不同。
+   * 读之前先看 size：预览一个几百 MB 的文件不该把宿主内存吃掉。
+   */
+  private async syntheticAddDiff(canonical: string, name: string): Promise<{ ok: boolean; output: string }> {
+    const header = `diff --git a/${name} b/${name}\nnew file\n--- /dev/null\n+++ b/${name}\n`
+    let info: Awaited<ReturnType<typeof stat>>
+    try {
+      info = await stat(join(canonical, name))
+    } catch {
+      return { ok: true, output: `${header}@@ new file (no content readable) @@\n` }
+    }
+    if (!info.isFile()) return { ok: true, output: `${header}@@ untracked directory @@\n` }
+    if (info.size > UNTRACKED_MAX_BYTES) {
+      return { ok: true, output: `${header}@@ too large to preview (${info.size} bytes) @@\n` }
+    }
+    const text = await readFile(join(canonical, name), 'utf8')
+    if (text.includes('\u0000')) return { ok: true, output: `${header}@@ binary file @@\n` }
+    const lines = text.split('\n')
+    const shown = lines.slice(0, UNTRACKED_MAX_LINES)
+    const body = shown.map((l) => `+${l}`).join('\n')
+    const rest = lines.length - shown.length
+    const tail = rest > 0 ? `\n+… (${rest} more lines)` : ''
+    return { ok: true, output: `${header}@@ -0,0 +1,${shown.length} @@\n${body}${tail}` }
   }
 
   /** 上游存在但未推送的提交（@{u}..HEAD）；无上游、上游不可解析（悬空跟踪引用）或无提交时为空数组。 */

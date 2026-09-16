@@ -538,6 +538,8 @@ function Changes({ api, path, flow }: { api: GitManagerApi; path: string; flow: 
   const [diffData, setDiffData] = useState<string>('')
   const [diffLoading, setDiffLoading] = useState(false)
   const [diffFailed, setDiffFailed] = useState(false)
+  /** 宿主给出的真实失败原因（空 = 只有客户端异常，用兜底文案）。 */
+  const [diffError, setDiffError] = useState('')
   const [treeView, setTreeView] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const { data: outgoing } = usePoll(() => api.outgoing(path), [path], 10000)
@@ -584,12 +586,17 @@ function Changes({ api, path, flow }: { api: GitManagerApi; path: string; flow: 
 
   const showDiff = async (file: string): Promise<void> => {
     if (diffFile === file) { setDiffFile(null); return }
-    setDiffFile(file); setDiffLoading(true); setDiffFailed(false)
+    setDiffFile(file); setDiffLoading(true); setDiffFailed(false); setDiffError('')
     try {
       const r = await api.diff(path, file)
       setDiffData(r.ok ? r.output : '')
-      if (!r.ok) setDiffFailed(true)
-    } catch { setDiffData(''); setDiffFailed(true) } finally { setDiffLoading(false) }
+      if (!r.ok) {
+        setDiffFailed(true)
+        // 把宿主的真实原因带出来。以前无论什么原因都显示"二进制文件或超出大小限制"
+        // ——而真实原因可能是"仓库还没有提交，HEAD 不存在"，两者对用户的含义完全不同。
+        setDiffError(r.error?.message ?? '')
+      }
+    } catch (e) { setDiffData(''); setDiffFailed(true); setDiffError(String(e instanceof Error ? e.message : e)) } finally { setDiffLoading(false) }
   }
 
   const toggleDir = (p: string): void => setExpanded((prev) => { const n = new Set(prev); if (n.has(p)) n.delete(p); else n.add(p); return n })
@@ -640,7 +647,7 @@ function Changes({ api, path, flow }: { api: GitManagerApi; path: string; flow: 
         </div>
         {diffFile === row.file && (
           diffFailed
-            ? <div className="gm-trunc-note">{t('diff.failed')}</div>
+            ? <div className="gm-trunc-note">{diffError !== '' ? `${t('diff.failed')}：${diffError.split('\n')[0]}` : t('diff.failed')}</div>
             : <DiffView patch={diffLoading ? '' : diffData} loading={diffLoading} />
         )}
       </div>

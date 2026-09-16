@@ -10,7 +10,8 @@
 面板根部 `--gm-*` 是一层**别名，不是调色板**：每一项都解析到宿主令牌，只有在宿主没发布该令牌时才回落到字面量（与 DSH 自己的 chrome 同形：`var(--dsw-alias-label-primary, #202124)`）。
 
 - 颜色：`--dsw-alias-bg-base / bg-layer-1 / bg-layer-3`、`label-primary / secondary / tertiary`、`border-l1 / l2`、`interactive-bg-hover / -active / -hover-accent`、`brand-primary`、`button-primary-fill / -hover`、`state-success / error / warn / business-primary`、`accent-soft`、`scrollbar-bg-l2`。
-- 排版：`--dsw-font-xxxs-11`（元信息）、`--dsw-font-xxs-12`（正文）、`--dsw-font-xxxs-strong-11`（按钮/页签/区块头）、`--ds-font-family-code`（哈希/路径/差异）。
+- 排版：`--dsw-font-xxxs-11`（元信息）、`--dsw-font-xxs-12`（正文）、`--dsw-font-xxxs-strong-11`（按钮/页签/区块头）、`--ds-font-family-code`（**只给机器可读的标识**：哈希、引用、计数、状态字母、差异正文）。
+  **名字一律用界面字体。** 目录行、路径段、文件名都曾经用过等宽，结果同一张列表里"目录一行等宽、文件一行界面字体"——这就是"字体不统一"的来源。等宽是给标识符的，不是给名字的。
 - 动效：`--ds-transition-duration-slow` + `--ds-ease-in-out`。
 - **没有一处写死的十六进制色，没有一处主题选择器。** 明暗、皮肤、对比度全部由主题包决定。
 
@@ -33,7 +34,7 @@
 
 - **页签**：26px 高的填充式激活态（`interactive-bg-active` + 主文字色 + accent 图标），不是下划线；是真正的 `<button role="tab">`，可聚焦、可键盘操作、带 title。
 - **行是原子**：固定最小高度（26–28px）、6px 圆角、hover 底色、选中底色——**每行都不描边**。行内操作悬停才浮出。
-- **状态字母徽章** `M/U/A/D/R`：右置、等宽 11px/strong、色取状态令牌。
+- **状态字母徽章** `M/U/A/D/R`：**左置**做定宽导轨（右置会在字母与文件名之间留一大片空白），等宽 11px/strong，色取状态令牌。
 - **区块头**：`--dsw-font-xxxs-strong-11` + 大写 + 0.05em letter-spacing + `label-tertiary`。
 - **空态**：图标 + 标题的 `Empty` 原子（"工作区干净"不是终点而是状态陈述）。
 
