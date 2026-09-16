@@ -194,6 +194,22 @@ export class EventBus {
   getHistory(limit = 100): GitEvent[] {
     return this.history.slice(-limit)
   }
+
+  // Panel SSE connection tracking: `requireApproval` uses this to fail FAST
+  // when no panel client is connected — with no panel open nothing can ever
+  // decide an approval card, so waiting for the full 5-minute timeout would
+  // just hang the agent's write tool with no feedback.
+  private panelSse = new Set<symbol>()
+
+  /** Register a live panel SSE connection; returns its unregister function. */
+  markPanelConnected(): () => void {
+    const token = Symbol('gitu-sse')
+    this.panelSse.add(token)
+    return () => { this.panelSse.delete(token) }
+  }
+
+  /** How many panel SSE clients are currently connected. */
+  panelClientCount(): number { return this.panelSse.size }
 }
 
 // ---------------------------------------------------------------------------

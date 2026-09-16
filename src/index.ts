@@ -55,11 +55,15 @@ export function apply(ctx: Context): void {
   ctx.effect(() => startRepoObserver(ctx, eventBus), 'gitcompass: repo observer')
 
   // 引导 agent 优先使用结构化 git/github 工具，而不是裸 bash git。
+  // 关键澄清：写操作的审批门在 gitcompass 面板（面板权威），任何 approval
+  // policy 下都可用——包括 danger-full-access 预设自带的 'never'（原生通道
+  // 的自动拒绝只是 ghost deny，不能否决面板卡）。没有面板在线时快速失败并
+  // 提示用户打开面板，而不是静默挂死。
   ctx.inject(['systemPrompt'], (promptCtx) => {
     promptCtx.systemPrompt.section({
       name: 'app:gitcompass',
       order: -97,
-      text: () => 'The gitcompass plugin provides structured git and GitHub tools (git_status, git_diff, git_branches, git_commit, git_push, github_pr_*, github_issue_*). For repository operations, prefer these over ad-hoc `git` shell commands: they are workspace-scoped, show clear output, and every write operation prompts the user for approval.',
+      text: () => 'The gitcompass plugin provides structured git and GitHub tools (git_status, git_diff, git_branches, git_commit, git_push, github_pr_*, github_issue_*). For repository operations, prefer these over ad-hoc `git` shell commands: they are workspace-scoped and show clear output. Write operations (commit / push / PR / issue writes) are gated by an approval card in the gitcompass panel — this works under ANY approval policy, including when DSH approval prompts are disabled ("never", e.g. the danger-full-access preset): the automatic rejection from the native approval channel is a ghost deny that cannot veto; the panel card decides. So when the user asks for a git/GitHub write, CALL the tool — do not skip it on the ground that approval prompts are disabled. If no panel is connected the call fails fast with a hint: tell the user to open the Git panel (or pre-approve the tool there) and then retry.',
     })
   })
 }

@@ -1,6 +1,6 @@
 {
   "name": "gitcompass",
-  "version": "1.6.3",
+  "version": "1.7.0",
   "description": "A GitHub-connected visual git panel for DeepSeek Harness — guided flow (branch → commit → push → PR → review → merge), commit graph with PR/CI badges, one-click GitHub login, and structured git tools for the agent.",
   "license": "MIT",
   "author": "gitcompass contributors",

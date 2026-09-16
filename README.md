@@ -15,7 +15,7 @@ A GitHub-connected visual git panel for [DeepSeek Harness](https://github.com/de
 - **GitHub Integration**: Device-flow OAuth login, PAT input, `gh` CLI reuse, encrypted token storage (DPAPI on Windows).
 - **Structured Git Tools** (model-side): `git_status`, `git_diff`, `git_branches`, `git_commit`, `git_push`, `github_pr_list/read/create/merge/comment/review`, `github_issue_list/read/create/comment`.
 - **Agent Activity Monitor**: a live SSE feed of every agent tool call (start/completion/failure); a repo observer polls workspace state to surface bash git operations performed outside the plugin's tools (new commits / branch switches / working-tree changes).
-- **In-Panel Approvals**: write operations pop an approval card inside the panel where you can **Approve** or **Reject** directly; races the native DSH modal — first decision wins. Panel decisions are one-shot and memory-only; without an open panel the flow falls back to the native approval channel.
+- **In-Panel Approvals (panel-authoritative)**: write operations pop an approval card inside the panel where you can **Approve** or **Reject** directly; races the native DSH modal — first decision wins. The native channel's automatic rejection (including the ghost deny under approval policy `never`, e.g. the danger-full-access preset) **cannot veto** the panel card — the panel approval path works under any approval policy. Panel decisions are one-shot and memory-only; with no panel connected the call fails fast with a hint to open the panel (or pre-approve the tool there), instead of silently hanging for 5 minutes.
 - **i18n**: Auto-follows DSH Web locale (Chinese / English).
 - **Theme**: Light/dark follows DSH Web GUI.
 

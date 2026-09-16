@@ -65,6 +65,9 @@ body[data-ds-dark-theme] .gitcompass-panel{
 .gc-repo select option{background:var(--gc-bg);color:var(--gc-fg)}
 .gc-repo select option:checked{font-weight:600}
 .gc-repo select:focus{outline:none;border-color:var(--gc-accent)}
+.gc-addrow{display:flex;gap:6px;align-items:center;padding-top:6px}
+.gc-addrow input{flex:1;min-width:0;background:transparent;border:1px solid var(--gc-border);border-radius:6px;padding:3px 8px;color:var(--gc-fg)}
+.gc-addrow input:focus{outline:none;border-color:var(--gc-accent)}
 .gc-flow{display:flex;align-items:center;gap:2px;padding:6px 8px;border-bottom:1px solid var(--gc-border);overflow-x:auto}
 .gc-step{display:flex;align-items:center;gap:3px;white-space:nowrap;padding:2px 6px;border-radius:10px;opacity:.55}
 .gc-step.done{opacity:1;background:var(--gc-accent-soft);color:var(--gc-accent)}
@@ -1811,6 +1814,9 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
   const [settingsOpen, setSettingsOpen] = useState(false)
   const pendingApprovals = useMemo(() => pendingApprovalCount(agentEvents), [agentEvents])
   const [, forceRender] = useState(0)
+  // 收录仓库的内联输入行状态。
+  const [addOpen, setAddOpen] = useState(false)
+  const [addValue, setAddValue] = useState('')
 
   const startDevice = (): void => {
     setDeviceBusy(true)
@@ -1860,14 +1866,17 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /** 手动收录本地仓库（嵌套仓库/未注册目录），返回值即最新合并清单。 */
-  const addRepoPrompt = (): void => {
-    const input = window.prompt(t('repo.addTitle'), '')
-    if (!input || input.trim() === '') return
-    void api.addRepo(input.trim()).then((ws) => {
+  /** 手动收录本地仓库（嵌套仓库/未注册目录），返回值即最新合并清单。
+   *  注意：Electron 不支持 window.prompt（同步抛 "prompt() is and will not
+   *  be supported."，点击按钮会毫无反馈），因此这里用面板内联输入行。 */
+  const submitAddRepo = (): void => {
+    const input = addValue.trim()
+    if (input === '') { setAddOpen(false); return }
+    void api.addRepo(input).then((ws) => {
       setWorkspaces(ws)
-      const added = ws.find((w) => w.path.toLowerCase() === input.trim().replace(/[\\/]+$/, '').toLowerCase())
+      const added = ws.find((w) => w.path.toLowerCase() === input.replace(/[\\/]+$/, '').toLowerCase())
       if (added) { setPath(added.path); setTick((x) => x + 1) }
+      setAddOpen(false); setAddValue('')
     }).catch((e) => reportError(t('op.failed'), e))
   }
   const removeCurrentRepo = (): void => {
@@ -1915,10 +1924,24 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
             {workspaces.length === 0 ? <option value="">{t('repo.none')}</option> : null}
             {workspaces.map((w) => <option key={w.path} value={w.path}>{w.title || w.path.split(/[\\/]/).pop()}</option>)}
           </select>
-          <button className="gc-btn" onClick={addRepoPrompt} title={t('repo.add')}><Icon name="plus" size={12} />{t('repo.add')}</button>
+          <button className="gc-btn" onClick={() => { setAddOpen(!addOpen); setAddValue('') }} title={t('repo.add')}><Icon name="plus" size={12} />{t('repo.add')}</button>
           <button className="gc-btn sm" onClick={removeCurrentRepo} title={t('repo.removeCurrent')}><Icon name="trash" size={13} /></button>
           <button className="gc-btn" onClick={() => setTick((x) => x + 1)} title={t('common.refresh')}><Icon name="sync" size={12} />{t('common.refresh')}</button>
           <button className="gc-btn sm" onClick={() => setSettingsOpen(!settingsOpen)} title={t('settings.title')}><Icon name="gear" size={13} /></button>
+        </div>
+        {addOpen ? (
+          <div className="gc-addrow">
+            <input
+              autoFocus
+              value={addValue}
+              placeholder={t('repo.addTitle').replace(/[:：]\s*$/, '')}
+              onChange={(e) => setAddValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitAddRepo(); else if (e.key === 'Escape') { setAddOpen(false); setAddValue('') } }}
+            />
+            <button className="gc-btn" onClick={submitAddRepo}>{t('actions.confirm')}</button>
+            <button className="gc-btn sm" onClick={() => { setAddOpen(false); setAddValue('') }}>{t('actions.cancel')}</button>
+          </div>
+        ) : null}
           {settingsOpen ? (
             <div className="gc-settings">
               <div className="gc-settings-row">
@@ -1944,7 +1967,6 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
               <div className="gc-muted" style={{ fontSize: 9, opacity: 0.6 }}>gitcompass v{GC_VERSION}</div>
             </div>
           ) : null}
-        </div>
       </div>
       <FlowStrip flow={flow} />
       <div className="gc-tabs">

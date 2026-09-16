@@ -15,7 +15,7 @@
 - **GitHub 集成**：设备流 OAuth 登录、PAT 输入、复用 `gh` CLI、加密 Token 存储（Windows DPAPI）。
 - **结构化 Git 工具**（Agent 侧）：`git_status`、`git_diff`、`git_branches`、`git_commit`、`git_push`、`github_pr_list/read/create/merge/comment/review`、`github_issue_list/read/create/comment`。
 - **Agent 活动监视器**：实时 SSE 事件流展示 Agent 正在执行的每次工具调用（开始/完成/失败），仓库观察器轮询捕获面板外的 bash git 操作（新提交 / 切换分支 / 工作区变更）。
-- **面板内审批**：Agent 的写操作在面板中弹出审批卡片，可直接**批准**或**拒绝**；与 DSH 原生弹窗并行竞速，先到者生效。批准决定一次性有效且不落盘；无面板在线时自动回退原生审批通道。
+- **面板内审批（面板权威）**：Agent 的写操作在面板中弹出审批卡片，可直接**批准**或**拒绝**；与 DSH 原生弹窗并行竞速，先到者生效。原生通道的自动拒绝（包括 approval policy 为 `never` 时的 ghost deny，例如 danger-full-access 预设自带 `never`）**不能否决**面板卡——任何审批策略下写操作都能走面板审批。面板决定一次性有效且不落盘；无面板在线时快速失败并提示打开面板（或先在面板中预批准），不再静默挂 5 分钟。
 - **多语言**：自动跟随 DSH Web 界面语言（中文 / 英文）。
 - **主题**：自动跟随 DSH Web GUI 明暗主题。
 

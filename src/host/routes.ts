@@ -141,8 +141,9 @@ export function route(services: Services) {
       // 发送最近历史
       for (const event of eventBus.getHistory(100)) send(event)
       const unsub = eventBus.subscribe('*', send)
+      const unpanel = eventBus.markPanelConnected()
       const ping = setInterval(() => { try { res.write(': ping\n\n') } catch {} }, 25_000)
-      req.on('close', () => { clearInterval(ping); unsub() })
+      req.on('close', () => { clearInterval(ping); unsub(); unpanel() })
       return
     }
 

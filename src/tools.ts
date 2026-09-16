@@ -87,6 +87,8 @@ async function requireApproval(ctx: Context, exec: ToolExec, reason: string, eve
   //     channel error — CANNOT veto: the panel card is this plugin's purpose-
   //     built gate. Wait for the panel decision or its 5-min timeout (null →
   //     reject, fail closed). The native dialog can only accelerate approval.
+  //   - EXCEPTION: with no panel client connected nothing can ever decide →
+  //     fail FAST with an actionable hint instead of hanging for 5 minutes.
   type Winner = { src: 'panel'; decision: 'approved' | 'rejected' | null } | { src: 'modal'; outcome: string | null }
   const panelPromise = panelApprovalBroker.wait(callId, 300_000).then(
     (d): Winner => ({ src: 'panel', decision: d }),
@@ -107,6 +109,20 @@ async function requireApproval(ctx: Context, exec: ToolExec, reason: string, eve
     winner = first
   } else if (first.outcome === 'allowed-once') {
     winner = first
+  } else if (!eventBus || eventBus.panelClientCount() === 0) {
+    // No panel connected → the panel card can never be decided. The modal
+    // already settled without a grant (typically the policy-'never' ghost
+    // deny), so no approval path remains: fail closed NOW with a message the
+    // agent can relay, instead of blocking until the 5-minute timeout.
+    if (eventBus) {
+      eventBus.emit('approval:rejected', { tool: exec.name, callId, summary: reason, source: 'no-panel' })
+    }
+    throw new Error(
+      `approval for "${exec.name}" cannot be decided: no gitcompass panel is connected `
+      + `and the native approval channel returned "${first.outcome ?? 'unavailable'}" (under approval policy 'never' this is an automatic ghost deny). `
+      + `The panel approval card is the deciding gate: ask the user to open the Git panel and retry `
+      + `— or pre-approve this tool from the panel for the rest of the session.`,
+    )
   } else {
     winner = await panelPromise
   }
@@ -231,7 +247,7 @@ export function registerTools(ctx: Context, service: GitService, eventBus?: Even
     }, eventBus),
     looseTool({
       name: 'git_commit',
-      description: 'COMMIT staged changes in a git workspace (git commit -m). THIS MODIFIES FILES — it always requires your approval.',
+      description: 'COMMIT staged changes in a git workspace (git commit -m). THIS MODIFIES FILES — always gated by the gitcompass panel approval card, which works under any approval policy (including prompts-disabled "never": the native auto-rejection cannot veto, the panel card decides). Without an open Git panel it fails fast — tell the user to open the Git panel, then retry.',
       parameters: {
         workspace: prop('string', true, 'Absolute path of the git workspace.'),
         message: prop('string', true, 'Commit message.'),
@@ -250,7 +266,7 @@ export function registerTools(ctx: Context, service: GitService, eventBus?: Even
     }, eventBus),
     looseTool({
       name: 'git_push',
-      description: 'PUSH the current branch of a git workspace to its remote (git push). THIS MODIFIES THE REMOTE — it always requires your approval.',
+      description: 'PUSH the current branch of a git workspace to its remote (git push). THIS MODIFIES THE REMOTE — same panel-approval gate as git_commit: works under any approval policy (even with DSH approval prompts disabled); without an open Git panel it fails fast — ask the user to open the Git panel, then retry.',
       parameters: {
         workspace: prop('string', true, 'Absolute path of the git workspace.'),
         remote: prop('string', false, 'Remote name (default: origin).'),
@@ -290,7 +306,7 @@ export function registerTools(ctx: Context, service: GitService, eventBus?: Even
     }, eventBus),
     looseTool({
       name: 'github_pr_create',
-      description: 'CREATE a pull request on GitHub. THIS MODIFIES THE REMOTE — it always requires your approval.',
+      description: 'CREATE a pull request on GitHub. THIS MODIFIES THE REMOTE — panel-approval gated, works under any approval policy (even with DSH approval prompts disabled); without an open Git panel it fails fast — ask the user to open the Git panel, then retry.',
       parameters: {
         owner: prop('string', true, 'Repository owner.'),
         repo: prop('string', true, 'Repository name.'),
@@ -314,7 +330,7 @@ export function registerTools(ctx: Context, service: GitService, eventBus?: Even
     }, eventBus),
     looseTool({
       name: 'github_pr_merge',
-      description: 'MERGE a pull request on GitHub. THIS MODIFIES THE REMOTE — it always requires your approval.',
+      description: 'MERGE a pull request on GitHub. THIS MODIFIES THE REMOTE — panel-approval gated, works under any approval policy (even with DSH approval prompts disabled); without an open Git panel it fails fast — ask the user to open the Git panel, then retry.',
       parameters: {
         owner: prop('string', true, 'Repository owner.'),
         repo: prop('string', true, 'Repository name.'),
@@ -343,7 +359,7 @@ export function registerTools(ctx: Context, service: GitService, eventBus?: Even
     }, eventBus),
     looseTool({
       name: 'github_issue_create',
-      description: 'CREATE an issue on GitHub. THIS MODIFIES THE REMOTE — it always requires your approval.',
+      description: 'CREATE an issue on GitHub. THIS MODIFIES THE REMOTE — panel-approval gated, works under any approval policy (even with DSH approval prompts disabled); without an open Git panel it fails fast — ask the user to open the Git panel, then retry.',
       parameters: {
         owner: prop('string', true, 'Repository owner.'),
         repo: prop('string', true, 'Repository name.'),
@@ -371,7 +387,7 @@ export function registerTools(ctx: Context, service: GitService, eventBus?: Even
     }, eventBus),
     looseTool({
       name: 'github_issue_comment',
-      description: 'COMMENT on a GitHub issue. THIS MODIFIES THE REMOTE — it always requires your approval.',
+      description: 'COMMENT on a GitHub issue. THIS MODIFIES THE REMOTE — panel-approval gated, works under any approval policy (even with DSH approval prompts disabled); without an open Git panel it fails fast — ask the user to open the Git panel, then retry.',
       parameters: {
         owner: prop('string', true, 'Repository owner.'),
         repo: prop('string', true, 'Repository name.'),
@@ -387,7 +403,7 @@ export function registerTools(ctx: Context, service: GitService, eventBus?: Even
     }, eventBus),
     looseTool({
       name: 'github_pr_comment',
-      description: 'COMMENT on a GitHub pull request. THIS MODIFIES THE REMOTE — it always requires your approval.',
+      description: 'COMMENT on a GitHub pull request. THIS MODIFIES THE REMOTE — panel-approval gated, works under any approval policy (even with DSH approval prompts disabled); without an open Git panel it fails fast — ask the user to open the Git panel, then retry.',
       parameters: {
         owner: prop('string', true, 'Repository owner.'),
         repo: prop('string', true, 'Repository name.'),
@@ -403,7 +419,7 @@ export function registerTools(ctx: Context, service: GitService, eventBus?: Even
     }, eventBus),
     looseTool({
       name: 'github_pr_review',
-      description: 'SUBMIT A REVIEW on a GitHub pull request. THIS MODIFIES THE REMOTE — it always requires your approval.',
+      description: 'SUBMIT A REVIEW on a GitHub pull request. THIS MODIFIES THE REMOTE — panel-approval gated, works under any approval policy (even with DSH approval prompts disabled); without an open Git panel it fails fast — ask the user to open the Git panel, then retry.',
       parameters: {
         owner: prop('string', true, 'Repository owner.'),
         repo: prop('string', true, 'Repository name.'),

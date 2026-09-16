@@ -45,9 +45,9 @@ interface PanelClientContext {
 
 export const inject = ['sessions', 'locale']
 
-const PANEL_DEFAULT_WIDTH = 480
-const PANEL_MIN_WIDTH = 320
-const PANEL_MAX_WIDTH = 760
+const PANEL_DEFAULT_WIDTH = 360
+const PANEL_MIN_WIDTH = 280
+const PANEL_MAX_WIDTH = 460
 
 let frameEl: HTMLElement | null = null
 
@@ -129,6 +129,95 @@ function waitForFrame(onFrame: (frame: HTMLElement) => void): () => void {
   return () => cancelAnimationFrame(raf)
 }
 
+// ── 常驻右侧 Dock：所有右栏面板插件共用一条网格轨道，上下面板一上一下堆叠，
+//    不再各自占一整列，也不再需要手动展开/收起 ──
+const DOCK_WIDTH_KEY = 'dsh.dockWidth'
+const DOCK_MIN_WIDTH = 300
+const DOCK_MAX_WIDTH = 520
+const DOCK_DEFAULT_WIDTH = 360
+
+function dockWidth(): number {
+  try {
+    const stored = Number(localStorage.getItem(DOCK_WIDTH_KEY))
+    if (Number.isFinite(stored) && stored >= DOCK_MIN_WIDTH && stored <= DOCK_MAX_WIDTH) return Math.round(stored)
+  } catch { /* storage may be unavailable */ }
+  return DOCK_DEFAULT_WIDTH
+}
+function setDockWidth(w: number): void {
+  try { localStorage.setItem(DOCK_WIDTH_KEY, String(Math.round(Math.min(DOCK_MAX_WIDTH, Math.max(DOCK_MIN_WIDTH, w))))) } catch { /* noop */ }
+}
+
+/** 网格轨道写入：按"流内子元素"重建整条轨道列表。
+ *  frame 的 children 里混有绝对定位的 overlay/拖拽手柄（非网格项），且旧的幽灵轨道可能残留，
+ *  因此不能按 children 下标或“补到 childCount”处理——否则 Dock 会被放到 0px 轨道上而不可见。
+ *  规则：轨道数 = 流内子元素数；每个流内子元素保留当前轨道宽度，Dock 所在项写为 widthPx。 */
+function setTrack(frame: HTMLElement, child: HTMLElement, widthPx: number): void {
+  const inline = frame.style.gridTemplateColumns
+  if (inline === '') return
+  const cur = parseTracks(inline)
+  const kids = Array.prototype.filter.call(frame.children, (c: HTMLElement) => {
+    const p = getComputedStyle(c).position
+    return p !== 'absolute' && p !== 'fixed'
+  }) as HTMLElement[]
+  const idx = kids.indexOf(child)
+  const parts = kids.map((k: HTMLElement, i: number) => {
+    if (i === idx) return `${widthPx}px`
+    return i < cur.length && cur[i] !== '' ? cur[i] : '0px'
+  })
+  frame.style.gridTemplateColumns = parts.join(' ')
+}
+
+/** 在 frame 中取得（或创建）共享右栏 Dock。首个创建者负责挂左缘拖拽手柄。 */
+function dockIn(frame: HTMLElement): { dock: HTMLElement; sync: () => void } {
+  const existing = frame.querySelector<HTMLElement>('[data-dsh-dock]')
+  if (existing !== null) {
+    return {
+      dock: existing,
+      sync: (): void => setTrack(frame, existing, dockWidth()),
+    }
+  }
+  const dock = document.createElement('div')
+  dock.dataset.dshDock = ''
+  dock.style.cssText = 'position:relative;height:100%;min-width:0;display:flex;flex-direction:column;overflow:hidden;border-left:1px solid rgba(128,128,128,.28);background:transparent;'
+  frame.appendChild(dock)
+  const grip = document.createElement('div')
+  grip.dataset.dshDockGrip = ''
+  grip.style.cssText = 'position:absolute;left:-4px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:20;'
+  let w = dockWidth()
+  const apply = (): void => setTrack(frame, dock, w)
+  grip.addEventListener('pointerdown', (e: PointerEvent): void => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = w
+    const onMove = (ev: PointerEvent): void => {
+      w = Math.min(DOCK_MAX_WIDTH, Math.max(DOCK_MIN_WIDTH, startW - (ev.clientX - startX)))
+      apply()
+    }
+    const onUp = (): void => {
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
+      setDockWidth(w)
+    }
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
+  })
+  dock.appendChild(grip)
+  apply()
+  return { dock, sync: apply }
+}
+
+/** 往 Dock 里追加一张"面板卡"：多卡时 flex 上下平分高度，自动一上一下堆叠。 */
+function dockCard(dock: HTMLElement): HTMLElement {
+  const card = document.createElement('div')
+  card.dataset.dshCard = ''
+  const hasCards = dock.querySelectorAll<HTMLElement>('[data-dsh-card]').length > 0
+  card.style.cssText = hasCards
+    ? 'flex:1 1 0;min-height:0;display:flex;flex-direction:column;overflow:auto;border-top:1px solid rgba(128,128,128,.28);'
+    : 'flex:1 1 0;min-height:0;display:flex;flex-direction:column;overflow:auto;'
+  dock.appendChild(card)
+  return card
+}
+
 export function apply(ctx: PanelClientContext): void {
   try {
     initI18n(ctx.locale)
@@ -141,71 +230,39 @@ export function apply(ctx: PanelClientContext): void {
     let root: Root | null = null
 
     const mount = (frame: HTMLElement): void => {
-      const column = document.createElement('div')
-      column.dataset.gitcompassCol = ''
-      column.style.minWidth = '0'
-      column.style.display = 'flex'
-      column.style.flexDirection = 'column'
-      column.style.position = 'relative'
-      column.style.borderLeft = '1px solid var(--gitcompass-border, rgba(128,128,128,0.25))'
-      column.style.overflow = 'auto'
-      frame.appendChild(column)
-
-      let panelWidth = loadPanelWidth()
-
-      const applyGrid = (): void => {
-        const inline = frame.style.gridTemplateColumns
-        if (inline === '') return
-        const tracks = parseTracks(inline)
-        if (tracks.length === 3) {
-          frame.style.gridTemplateColumns = `${tracks.join(' ')} ${panelWidth}px`
-        } else if (tracks.length > 3) {
-          frame.style.gridTemplateColumns = `${tracks.slice(0, 3).join(' ')} ${panelWidth}px`
-        }
-      }
-      applyGrid()
-      const observer = new MutationObserver(() => applyGrid())
-      observer.observe(frame, { attributes: true, attributeFilter: ['style'] })
-
-      // 左缘拖拽手柄：调整面板宽度（320–760px），记忆在 localStorage。
-      const grip = document.createElement('div')
-      grip.dataset.gitcompassGrip = ''
-      grip.style.cssText = 'position:absolute;left:-3px;top:0;bottom:0;width:7px;cursor:col-resize;z-index:10;'
-      grip.addEventListener('pointerdown', (e) => {
-        e.preventDefault()
-        const startX = e.clientX
-        const startWidth = panelWidth
-        const onMove = (ev: PointerEvent): void => {
-          panelWidth = Math.round(Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, startWidth - (ev.clientX - startX))))
-          applyGrid()
-        }
-        const onUp = (): void => {
-          document.removeEventListener('pointermove', onMove)
-          document.removeEventListener('pointerup', onUp)
-          try { localStorage.setItem('gc.panelWidth', String(panelWidth)) } catch { /* noop */ }
-        }
-        document.addEventListener('pointermove', onMove)
-        document.addEventListener('pointerup', onUp)
-      })
-      column.appendChild(grip)
+      // 加入共享右栏 Dock（无则创建），作为一张等高卡片一上一下堆叠。
+      const { dock, sync } = dockIn(frame)
+      const card = dockCard(dock)
+      card.dataset.gitcompassCol = ''
 
       const api = new GitcompassApi()
       const host = ctx as unknown as { sessions: PanelClientContext['sessions'] }
       try {
-        root = createRoot(column)
+        root = createRoot(card)
         root.render(createElement(Boundary, null, createElement(CompassPanel, { api, sessions: host.sessions })))
       } catch (error) {
         try { document.body.dataset.gitcompassErr = String(error instanceof Error ? error.message : error) } catch { /* noop */ }
         console.error('gitcompass: mount failed', error)
       }
 
+      // 外壳重排 / 其他面板增删 → 保证 Dock 轨道存在且宽度正确（幂等）。
+      const observer = new MutationObserver(() => sync())
+      observer.observe(frame, { attributes: true, attributeFilter: ['style'], childList: true })
+      sync()
+
       disposers.push(() => {
         observer.disconnect()
         root?.unmount()
-        column.remove()
-        const inline = frame.style.gridTemplateColumns
-        if (inline !== '' && parseTracks(inline).length === 4) {
-          frame.style.gridTemplateColumns = parseTracks(inline).slice(0, 3).join(' ')
+        card.remove()
+        // Dock 已空：归零轨道后移除，并修剪尾部 0px 残留。
+        if (dock.querySelector<HTMLElement>('[data-dsh-card]') === null) {
+          setTrack(frame, dock, 0)
+          dock.remove()
+          const cur = parseTracks(frame.style.gridTemplateColumns)
+          const over = cur.length - frame.children.length
+          if (over > 0 && cur.slice(-over).every((t) => t === '0px')) {
+            frame.style.gridTemplateColumns = cur.slice(0, cur.length - over).join(' ')
+          }
         }
       })
     }
