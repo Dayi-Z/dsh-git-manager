@@ -1,9 +1,9 @@
 /**
- * gitcompass — client-side shared SSE subscription to the host event bus.
+ * dsh-git-manager — client-side shared SSE subscription to the host event bus.
  * One EventSource per panel (module-level store) regardless of how many
  * components subscribe; used by the Agent activity monitor and the tab-bar
  * pending-approval badge.
- * @module gitcompass/client/events
+ * @module dsh-git-manager/client/events
  */
 
 import { useSyncExternalStore } from 'react'
@@ -26,7 +26,7 @@ let refCount = 0
 
 function ensureSource(): void {
   if (source !== null) return
-  source = new EventSource('/gitu/events')
+  source = new EventSource('/gitm/events')
   source.onmessage = (msg) => {
     try {
       const event = JSON.parse(msg.data) as GitEvent

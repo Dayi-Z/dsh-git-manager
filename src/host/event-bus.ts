@@ -1,5 +1,5 @@
 /**
- * gitcompass — Event Bus: in-memory pub/sub for agent tool lifecycle events
+ * dsh-git-manager — Event Bus: in-memory pub/sub for agent tool lifecycle events
  * and repository observation. Feeds the client-side activity monitor and
  * approval queue via SSE.
  *
@@ -7,7 +7,7 @@
  *   ① Tool wrappers emit start/completion/approval events directly
  *   ② Repo observer polls git log/status/branch to detect bash git commands
  *
- * @module gitcompass/host/event-bus
+ * @module dsh-git-manager/host/event-bus
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -153,7 +153,7 @@ export class PanelApprovalBroker {
   }
 }
 
-/** Singleton shared by tool wrappers and /gitu routes. */
+/** Singleton shared by tool wrappers and /gitm routes. */
 export const panelApprovalBroker = new PanelApprovalBroker()
 
 // ---------------------------------------------------------------------------
@@ -203,7 +203,7 @@ export class EventBus {
 
   /** Register a live panel SSE connection; returns its unregister function. */
   markPanelConnected(): () => void {
-    const token = Symbol('gitu-sse')
+    const token = Symbol('gitm-sse')
     this.panelSse.add(token)
     return () => { this.panelSse.delete(token) }
   }

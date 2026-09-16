@@ -1,7 +1,7 @@
 /**
- * gitcompass — commit DAG layout: lane assignment (GitLens/gitk-style columns).
+ * dsh-git-manager — commit DAG layout: lane assignment (GitLens/gitk-style columns).
  * Adapted from dsh-git-panel's battle-tested implementation.
- * @module gitcompass/client/graph
+ * @module dsh-git-manager/client/graph
  */
 
 import type { GraphCommit } from '../core/types.ts'

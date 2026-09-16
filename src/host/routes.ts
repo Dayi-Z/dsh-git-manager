@@ -1,8 +1,8 @@
 /**
- * gitcompass — /gitu/* HTTP routes: workspace-bounded git operations plus
+ * dsh-git-manager — /gitm/* HTTP routes: workspace-bounded git operations plus
  * GitHub auth / PR endpoints. All git ops pass the workspace gate; GitHub ops
  * never expose the token to the client.
- * @module gitcompass/host/routes
+ * @module dsh-git-manager/host/routes
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -128,7 +128,7 @@ export function route(services: Services) {
     const path = url.pathname
 
     // SSE endpoint: live event stream for the activity monitor
-    if (path === '/gitu/events' && req.method === 'GET') {
+    if (path === '/gitm/events' && req.method === 'GET') {
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
@@ -169,8 +169,8 @@ export function route(services: Services) {
 
     switch (path) {
       // ---------------- workspaces / git ----------------
-      case '/gitu/workspaces': return ok(res, await listGitWorkspaces(ctx))
-      case '/gitu/repos-add': {
+      case '/gitm/workspaces': return ok(res, await listGitWorkspaces(ctx))
+      case '/gitm/repos-add': {
         const p = field(payload, 'path')
         if (p === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => {
@@ -181,7 +181,7 @@ export function route(services: Services) {
           return await listGitWorkspaces(ctx)
         })
       }
-      case '/gitu/repos-remove': {
+      case '/gitm/repos-remove': {
         const p = field(payload, 'path')
         if (p === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => {
@@ -189,15 +189,15 @@ export function route(services: Services) {
           return await listGitWorkspaces(ctx)
         })
       }
-      case '/gitu/current': {
+      case '/gitm/current': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.current(root))
       }
-      case '/gitu/branches': {
+      case '/gitm/branches': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.branches(root))
       }
-      case '/gitu/graph': {
+      case '/gitm/graph': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => {
           const graph = await service.graph(root)
@@ -215,7 +215,7 @@ export function route(services: Services) {
           return graph
         })
       }
-      case '/gitu/flow': {
+      case '/gitm/flow': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => {
           const [repo, current, aheadBehind, upstream, dirty] = await Promise.all([
@@ -243,57 +243,57 @@ export function route(services: Services) {
           return { repo, current, ...aheadBehind, hasRemote, upstreamSet: upstream !== '', prNumber, dirty, steps }
         })
       }
-      case '/gitu/switch': {
+      case '/gitm/switch': {
         const branch = field(payload, 'branch'); if (root === null || branch === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.switchBranch(root, branch))
       }
-      case '/gitu/create-branch': {
+      case '/gitm/create-branch': {
         const branch = field(payload, 'branch'); if (root === null || branch === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.createBranch(root, branch))
       }
-      case '/gitu/pull': {
+      case '/gitm/pull': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         const rebase = boolField(payload, 'rebase') ?? false
         return wrap(async () => await service.pull(root, rebase))
       }
-      case '/gitu/fetch': {
+      case '/gitm/fetch': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.fetchAll(root))
       }
-      case '/gitu/push': {
+      case '/gitm/push': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         const remote = field(payload, 'remote') ?? undefined
         const branch = field(payload, 'branch') ?? undefined
         return wrap(async () => await service.push(root, remote, branch))
       }
-      case '/gitu/commit': {
+      case '/gitm/commit': {
         const message = field(payload, 'message'); if (root === null || message === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.commit(root, message))
       }
-      case '/gitu/stage': {
+      case '/gitm/stage': {
         const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.stageFile(root, file))
       }
-      case '/gitu/unstage': {
+      case '/gitm/unstage': {
         const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.unstageFile(root, file))
       }
-      case '/gitu/stage-all': {
+      case '/gitm/stage-all': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.stageAll(root))
       }
-      case '/gitu/status': {
+      case '/gitm/status': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.status(root))
       }
-      case '/gitu/diff': {
+      case '/gitm/diff': {
         const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.diffFile(root, file))
       }
       // 全文件对照（文件审批标签页）：before/after 全文 + 增删行号集合
       // 注意：service.reviewFile 自带一层 {ok,value} 信封——这里必须解包，
       // 否则客户端拿到双重信封，把内层信封当 ComparePayload 渲染直接崩溃。
-      case '/gitu/review-file': {
+      case '/gitm/review-file': {
         const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => {
           const r = await service.reviewFile(root, file)
@@ -301,115 +301,115 @@ export function route(services: Services) {
           return r.value
         })
       }
-      case '/gitu/delete': {
+      case '/gitm/delete': {
         const branch = field(payload, 'branch'); if (root === null || branch === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.deleteBranch(root, branch))
       }
       // 传出的更改：@{u}..HEAD 的提交列表（无上游 → 空数组）。
-      case '/gitu/outgoing':
+      case '/gitm/outgoing':
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.outgoing(root))
       // 丢弃单文件本地更改（已跟踪 checkout --；未跟踪 clean -f --）。
-      case '/gitu/discard': {
+      case '/gitm/discard': {
         const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.discardFile(root, file))
       }
       // 图谱下钻：单个提交的变更文件清单 / 单文件补丁。
-      case '/gitu/commit-files': {
+      case '/gitm/commit-files': {
         const sha = field(payload, 'sha'); if (root === null || sha === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.commitFiles(root, sha))
       }
-      case '/gitu/commit-patch': {
+      case '/gitm/commit-patch': {
         const sha = field(payload, 'sha'); const file = field(payload, 'file')
         if (root === null || sha === null || file === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.commitPatch(root, sha, file))
       }
       // gh/API 通道推送：github.com 直连不可用时的恢复路径（逐提交在 GitHub 端重建）。
-      case '/gitu/api-push':
+      case '/gitm/api-push':
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.apiPush(root))
-      case '/gitu/rename': {
+      case '/gitm/rename': {
         const branch = field(payload, 'branch'); const newName = field(payload, 'newName')
         if (root === null || branch === null || newName === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.renameBranch(root, branch, newName))
       }
-      case '/gitu/delete-remote': {
+      case '/gitm/delete-remote': {
         const branch = field(payload, 'branch'); if (root === null || branch === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.deleteRemoteBranch(root, branch))
       }
-      case '/gitu/merge': {
+      case '/gitm/merge': {
         const branch = field(payload, 'branch'); if (root === null || branch === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.mergeBranch(root, branch))
       }
-      case '/gitu/stash-list': {
+      case '/gitm/stash-list': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.stashList(root))
       }
-      case '/gitu/stash-push': {
+      case '/gitm/stash-push': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         const message = field(payload, 'message') ?? undefined
         return wrap(async () => await service.stashPush(root, message))
       }
-      case '/gitu/stash-pop': {
+      case '/gitm/stash-pop': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.stashPop(root))
       }
       // 贮藏明细：按引用 应用（保留栈）/ 丢弃
-      case '/gitu/stash-apply': {
+      case '/gitm/stash-apply': {
         const ref = field(payload, 'ref'); const action = field(payload, 'action') ?? 'apply'
         if (root === null || ref === null || (action !== 'apply' && action !== 'drop')) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.stashAction(root, action, ref))
       }
       // 撤销最近一次提交（soft reset，改动保留在暂存区）
-      case '/gitu/undo-commit':
+      case '/gitm/undo-commit':
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.undoCommit(root))
       // 修补最近一次提交（amend）
-      case '/gitu/amend': {
+      case '/gitm/amend': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         const message = field(payload, 'message') ?? undefined
         return wrap(async () => await service.amendCommit(root, message))
       }
       // 冲突状态与出口：逐文件 我方/对方、中止、变基继续
-      case '/gitu/conflict-state':
+      case '/gitm/conflict-state':
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.conflictState(root))
-      case '/gitu/conflict-resolve': {
+      case '/gitm/conflict-resolve': {
         const file = field(payload, 'file'); const side = field(payload, 'side')
         if (root === null || file === null || (side !== 'ours' && side !== 'theirs')) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.resolveConflict(root, file, side))
       }
-      case '/gitu/conflict-abort': {
+      case '/gitm/conflict-abort': {
         const kind = field(payload, 'kind')
         if (root === null || (kind !== 'merge' && kind !== 'rebase')) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.abortConflict(root, kind))
       }
-      case '/gitu/rebase-continue':
+      case '/gitm/rebase-continue':
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.continueRebase(root))
       // 标签：列表 / 建（可注释）/ 删 / 推
-      case '/gitu/tags':
+      case '/gitm/tags':
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.tags(root))
-      case '/gitu/tag-create': {
+      case '/gitm/tag-create': {
         const name = field(payload, 'name'); if (root === null || name === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.tagCreate(root, name, field(payload, 'message') ?? undefined))
       }
-      case '/gitu/tag-delete': {
+      case '/gitm/tag-delete': {
         const name = field(payload, 'name'); if (root === null || name === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.tagDelete(root, name))
       }
-      case '/gitu/tag-push': {
+      case '/gitm/tag-push': {
         const name = field(payload, 'name'); if (root === null || name === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.tagPush(root, name))
       }
       // 未跟踪文件一键加入 .gitignore
-      case '/gitu/gitignore-add': {
+      case '/gitm/gitignore-add': {
         const file = field(payload, 'file'); if (root === null || file === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.gitignoreAdd(root, file))
       }
       // 从 URL 克隆到父目录并登记书架，返回完整清单
-      case '/gitu/clone': {
+      case '/gitm/clone': {
         const parent = field(payload, 'parent'); const url = field(payload, 'url')
         if (parent === null || url === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => {
@@ -419,27 +419,27 @@ export function route(services: Services) {
           return { path: canonical, workspaces: await listGitWorkspaces(ctx) }
         })
       }
-      case '/gitu/cherry-pick': {
+      case '/gitm/cherry-pick': {
         const sha = field(payload, 'sha'); if (root === null || sha === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.cherryPick(root, sha))
       }
-      case '/gitu/revert': {
+      case '/gitm/revert': {
         const sha = field(payload, 'sha'); if (root === null || sha === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await service.revertCommit(root, sha))
       }
 
       // ---------------- GitHub auth ----------------
       // 注意：这些返回值不能带 `ok` 键（wrap 会把带 ok 的对象当 OpResult 再包一层）。
-      case '/gitu/github/auth': return wrap(async () => {
+      case '/gitm/github/auth': return wrap(async () => {
         const state = await ghAuthState()
         const ghAvailable = await ghLoggedIn()
         return { ...state, ghAvailable }
       })
-      case '/gitu/github/device': return wrap(async () => {
+      case '/gitm/github/device': return wrap(async () => {
         const code = await startDeviceFlow()
         return { userCode: code.userCode, verificationUri: code.verificationUri, interval: code.interval, deviceCode: code.deviceCode }
       })
-      case '/gitu/github/poll': {
+      case '/gitm/github/poll': {
         const deviceCode = field(payload, 'deviceCode')
         const interval = numField(payload, 'interval') ?? 5
         if (deviceCode === null) return fail(res, BAD_REQUEST, 400)
@@ -452,7 +452,7 @@ export function route(services: Services) {
           return { pending: false }
         })
       }
-      case '/gitu/github/token': {
+      case '/gitm/github/token': {
         const token = field(payload, 'token'); if (token === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => {
           await saveToken(token)
@@ -460,28 +460,28 @@ export function route(services: Services) {
           return { saved: true }
         })
       }
-      case '/gitu/github/logout': return wrap(async () => {
+      case '/gitm/github/logout': return wrap(async () => {
         await clearToken()
         return await ghAuthState()
       })
-      case '/gitu/github/repo': {
+      case '/gitm/github/repo': {
         if (root === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => { const r = await githubRepoForPath(ctx, service, root); if (!r.ok) throw Object.assign(new Error(r.error.message), { gitError: r.error }); return r.value })
       }
 
       // ---------------- GitHub PRs / issues ----------------
-      case '/gitu/github/prs': {
+      case '/gitm/github/prs': {
         const owner = field(payload, 'owner'); const repo = field(payload, 'repo')
         if (owner === null || repo === null) return fail(res, BAD_REQUEST, 400)
         const state = field(payload, 'state') ?? 'open'
         return wrap(async () => await listPRs(owner, repo, state as 'open' | 'closed' | 'all'))
       }
-      case '/gitu/github/pr': {
+      case '/gitm/github/pr': {
         const owner = field(payload, 'owner'); const repo = field(payload, 'repo'); const number = numField(payload, 'number')
         if (owner === null || repo === null || number === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await getPRDetail(owner, repo, number))
       }
-      case '/gitu/github/pr-create': {
+      case '/gitm/github/pr-create': {
         const owner = field(payload, 'owner'); const repo = field(payload, 'repo')
         const title = field(payload, 'title'); const head = field(payload, 'head'); const base = field(payload, 'base')
         if (owner === null || repo === null || title === null || head === null || base === null) return fail(res, BAD_REQUEST, 400)
@@ -489,18 +489,18 @@ export function route(services: Services) {
         const draft = boolField(payload, 'draft') ?? false
         return wrap(async () => await createPR(owner, repo, { title, body, head, base, draft }))
       }
-      case '/gitu/github/pr-merge': {
+      case '/gitm/github/pr-merge': {
         const owner = field(payload, 'owner'); const repo = field(payload, 'repo'); const number = numField(payload, 'number')
         const method = (field(payload, 'method') ?? 'squash') as 'merge' | 'squash' | 'rebase'
         if (owner === null || repo === null || number === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => { await mergePR(owner, repo, number, method); return { merged: true } })
       }
-      case '/gitu/github/pr-comment': {
+      case '/gitm/github/pr-comment': {
         const owner = field(payload, 'owner'); const repo = field(payload, 'repo'); const number = numField(payload, 'number'); const body = field(payload, 'body')
         if (owner === null || repo === null || number === null || body === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => { await commentPR(owner, repo, number, body); return { commented: true } })
       }
-      case '/gitu/github/pr-review': {
+      case '/gitm/github/pr-review': {
         const owner = field(payload, 'owner'); const repo = field(payload, 'repo'); const number = numField(payload, 'number')
         const state = field(payload, 'state'); const body = field(payload, 'body') ?? undefined
         if (owner === null || repo === null || number === null || state === null) return fail(res, BAD_REQUEST, 400)
@@ -509,44 +509,44 @@ export function route(services: Services) {
           return { reviewed: true }
         })
       }
-      case '/gitu/github/issues': {
+      case '/gitm/github/issues': {
         const owner = field(payload, 'owner'); const repo = field(payload, 'repo')
         if (owner === null || repo === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await listIssues(owner, repo))
       }
-      case '/gitu/github/issue-create': {
+      case '/gitm/github/issue-create': {
         const owner = field(payload, 'owner'); const repo = field(payload, 'repo'); const title = field(payload, 'title')
         const body = field(payload, 'body') ?? undefined
         if (owner === null || repo === null || title === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await createIssue(owner, repo, title, body))
       }
-      case '/gitu/github/issue-comment': {
+      case '/gitm/github/issue-comment': {
         const owner = field(payload, 'owner'); const repo = field(payload, 'repo'); const number = numField(payload, 'number'); const body = field(payload, 'body')
         if (owner === null || repo === null || number === null || body === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => { await commentIssue(owner, repo, number, body); return { commented: true } })
       }
-      case '/gitu/github/issue': {
+      case '/gitm/github/issue': {
         const owner = field(payload, 'owner'); const repo = field(payload, 'repo'); const number = numField(payload, 'number')
         if (owner === null || repo === null || number === null) return fail(res, BAD_REQUEST, 400)
         return wrap(async () => await getIssueDetail(owner, repo, number))
       }
       // Panel → host: pre-approve a tool (skip modal dialog when agent requests it)
-      case '/gitu/preapprove': {
+      case '/gitm/preapprove': {
         const tool = field(payload, 'tool'); const callId = field(payload, 'callId')
         if (tool === null) return fail(res, BAD_REQUEST, 400)
         preApprove(tool, callId ?? undefined)
         return json(res, { ok: true, value: { preApproved: true } })
       }
       // Panel → host: list / revoke session pre-approvals (visibility + undo).
-      case '/gitu/preapprove-list':
+      case '/gitm/preapprove-list':
         return json(res, { ok: true, value: { tools: listPreApprovals() } })
-      case '/gitu/preapprove-clear': {
+      case '/gitm/preapprove-clear': {
         const tool = field(payload, 'tool')
         revokePreApproval(tool ?? undefined)
         return json(res, { ok: true, value: { cleared: true, tools: listPreApprovals() } })
       }
       // Panel → host: resolve a LIVE approval request (approve/reject button).
-      case '/gitu/approval': {
+      case '/gitm/approval': {
         const callId = field(payload, 'callId'); const decisionRaw = field(payload, 'decision')
         if (callId === null || (decisionRaw !== 'approved' && decisionRaw !== 'rejected')) return fail(res, BAD_REQUEST, 400)
         const resolved = panelApprovalBroker.decide(callId, decisionRaw)
@@ -563,14 +563,14 @@ export function route(services: Services) {
       // Demo: emit a fabricated file-review approval card so the UI can be
       // exercised without a real agent write. Nothing is executed; the card
       // resolves nothing (broker has no waiter) and is purely cosmetic.
-      case '/gitu/preview-review': {
+      case '/gitm/preview-review': {
         const sampleFiles = [
           {
             path: 'src/client/Panel.tsx',
             additions: 4, deletions: 1,
             diff: '',
-            beforeFull: { exists: true, text: 'import { t } from \'./i18n.ts\'\n\nconst css = ``\n\nexport function CompassPanel() {\n  return (\n    <div className="gitcompass-panel">\n    </div>\n  )\n}\n' },
-            afterFull: { text: 'import { t } from \'./i18n.ts\'\n\nconst css = `\n.panel-grid{display:grid;grid-template-columns:1fr 1fr}\n.panel-grid .del{background:rgba(248,81,73,.16)}\n.panel-grid .add{background:rgba(46,160,67,.16)}\n`\n\nexport function CompassPanel() {\n  const [tab, setTab] = useState<TabId>(\'changes\')\n  return (\n    <div className="gitcompass-panel">\n    </div>\n  )\n}\n' },
+            beforeFull: { exists: true, text: 'import { t } from \'./i18n.ts\'\n\nconst css = ``\n\nexport function CompassPanel() {\n  return (\n    <div className="gm-panel">\n    </div>\n  )\n}\n' },
+            afterFull: { text: 'import { t } from \'./i18n.ts\'\n\nconst css = `\n.panel-grid{display:grid;grid-template-columns:1fr 1fr}\n.panel-grid .del{background:rgba(248,81,73,.16)}\n.panel-grid .add{background:rgba(46,160,67,.16)}\n`\n\nexport function CompassPanel() {\n  const [tab, setTab] = useState<TabId>(\'changes\')\n  return (\n    <div className="gm-panel">\n    </div>\n  )\n}\n' },
             delLines: [3],
             addLines: [3, 4, 5, 6, 9],
           },
@@ -578,8 +578,8 @@ export function route(services: Services) {
             path: 'README.zh.md',
             additions: 2, deletions: 0,
             diff: '',
-            beforeFull: { exists: true, text: '# gitcompass\n\n## 功能特性\n\n- 引导式 GitHub Flow 流程条\n\n## 安装\n' },
-            afterFull: { text: '# gitcompass\n\n## 功能特性\n\n- 引导式 GitHub Flow 流程条\n- **Agent 活动监视器**：实时 SSE 事件流\n- **面板内审批**：批准 / 拒绝 / 本会话允许\n\n## 安装\n' },
+            beforeFull: { exists: true, text: '# dsh-git-manager\n\n## 功能特性\n\n- 引导式 GitHub Flow 流程条\n\n## 安装\n' },
+            afterFull: { text: '# dsh-git-manager\n\n## 功能特性\n\n- 引导式 GitHub Flow 流程条\n- **Agent 活动监视器**：实时 SSE 事件流\n- **面板内审批**：批准 / 拒绝 / 本会话允许\n\n## 安装\n' },
             delLines: [],
             addLines: [5, 6],
           },
@@ -603,8 +603,8 @@ export function route(services: Services) {
   }
 }
 
-export function registerGitcompassRoutes(ctx: Context, service: GitService, eventBus: EventBus): () => void {
-  return ctx.webServer.register({ kind: 'prefix', path: '/gitu', handler: route({ service, ctx, eventBus }) })
+export function registerGitManagerRoutes(ctx: Context, service: GitService, eventBus: EventBus): () => void {
+  return ctx.webServer.register({ kind: 'prefix', path: '/gitm', handler: route({ service, ctx, eventBus }) })
 }
 
 // Re-exported for tests/tools.

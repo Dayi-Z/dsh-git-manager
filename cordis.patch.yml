@@ -1,5 +1,28 @@
-# gitcompass — DSH web git + GitHub workbench bundle patch.
-# Installed via `dsh plugin --profile web add github:Dayi-Z/gitcompass` (or link:).
+# dsh-git-manager — DSH web git + GitHub workbench bundle patch.
+#
+# This file is the `dsh.bundle.patch` layer of the package: installing it with
+#
+#   dsh plugin --profile <name> add link:/path/to/dsh-git-manager
+#
+# makes the profile loader merge this patch (a single `insert` of the plugin
+# row) after the profile's own patch layer. No profile file edits needed.
+#
+# The entry id MUST stay equal to the package name. dsh-client-modules serves
+# this plugin's browser half at `/plugins/<entry-id>/client.js` and registers
+# the module under the same id, while the built bundle calls
+# `__ModuleLoader__.load({ id })` with the id baked in by
+# scripts/normalize-client-banner.mjs. Three ids, one value: rename one and the
+# panel silently fails to mount.
+#
+# A profile-level override still targets the row by that id:
+#
+#   - id: dsh-git-manager
+#     config: { ... }
+#
+# Renamed from `gitcompass` in 2.0.0: the plugin, its routes (/gitm/*), its
+# CSS surface (--gm-*) and its package name all moved in one step. The
+# model-facing tool names (git_status, git_commit, github_pr_*, …) are
+# deliberately unchanged — they name the operation, not the product.
 - insert:
-    - id: gitcompass
-      name: 'gitcompass'
+    - id: dsh-git-manager
+      name: 'dsh-git-manager'

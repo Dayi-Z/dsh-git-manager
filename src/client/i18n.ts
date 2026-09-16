@@ -1,13 +1,13 @@
 /**
- * gitcompass — minimal bilingual dictionary. zh default (matches the primary
+ * dsh-git-manager — minimal bilingual dictionary. zh default (matches the primary
  * audience), en fallback driven by the harness locale.
- * @module gitcompass/client/i18n
+ * @module dsh-git-manager/client/i18n
  */
 
 type Dict = Record<string, string>
 
 const zh: Dict = {
-  'panel.title': '罗盘',
+  'panel.title': 'Git 管理',
   'repo.pick': '选择仓库',
   'repo.none': '无 git 仓库（打开一个 git 工作区）',
   'flow.branch': '分支',
@@ -249,7 +249,7 @@ const zh: Dict = {
 }
 
 const en: Dict = {
-  'panel.title': 'Compass',
+  'panel.title': 'Git Manager',
   'repo.pick': 'Pick repository',
   'repo.none': 'No git repo (open a git workspace)',
   'flow.branch': 'Branch',
@@ -496,13 +496,13 @@ let dict: Dict = zh
 let override: 'zh' | 'en' | null = null
 let hostActive = 'zh'
 try {
-  const saved = localStorage.getItem('gc.locale')
+  const saved = localStorage.getItem('gm.locale')
   if (saved === 'zh' || saved === 'en') override = saved
 } catch { /* no storage */ }
 
 export function setLocaleOverride(locale: 'zh' | 'en' | null): void {
   override = locale
-  try { localStorage.setItem('gc.locale', locale ?? '') } catch { /* no storage */ }
+  try { localStorage.setItem('gm.locale', locale ?? '') } catch { /* no storage */ }
   applyLocale()
 }
 

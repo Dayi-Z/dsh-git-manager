@@ -1,9 +1,13 @@
 {
-  "name": "gitcompass",
-  "version": "1.7.0",
-  "description": "A GitHub-connected visual git panel for DeepSeek Harness — guided flow (branch → commit → push → PR → review → merge), commit graph with PR/CI badges, one-click GitHub login, and structured git tools for the agent.",
+  "name": "dsh-git-manager",
+  "version": "2.0.0",
+  "description": "A GitHub-connected visual git manager for DeepSeek Harness — guided flow (branch → commit → push → PR → review → merge), commit graph with PR/CI badges, one-click GitHub login, and structured git tools for the agent. Its panel chrome rides the DSH theme tokens, so it re-skins with the host and every dsh-web-ui skin.",
   "license": "MIT",
-  "author": "gitcompass contributors",
+  "author": "dsh-git-manager contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dayi-Z/dsh-git-manager.git"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -45,6 +49,7 @@
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
+    "git-manager",
     "git",
     "github",
     "pull-request",

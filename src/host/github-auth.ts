@@ -1,18 +1,18 @@
 /**
- * gitcompass — GitHub auth: device flow login, DPAPI-encrypted token storage,
+ * dsh-git-manager — GitHub auth: device flow login, DPAPI-encrypted token storage,
  * gh CLI reuse and token sync.
  *
  * Security rules:
  *  - The token never leaves the host process; it is encrypted at rest with
  *    Windows DPAPI (CurrentUser scope — only this Windows account can decrypt)
- *    and stored under ~/.dsh/storages/gitcompass/ with tightened ACLs.
+ *    and stored under ~/.dsh/storages/dsh-git-manager/ with tightened ACLs.
  *  - Token resolution order: stored token → `gh auth token` (reuse an already
  *    logged-in gh CLI) → device flow (gh's public OAuth app, no app setup) →
  *    explicit PAT input as a last resort.
  *  - After obtaining a token via device flow / PAT, it is ALSO written into gh
  *    (`gh auth login --with-token`) so the command line works with the same
  *    account.
- * @module gitcompass/host/github-auth
+ * @module dsh-git-manager/host/github-auth
  */
 
 import { spawn } from 'node:child_process'
@@ -24,7 +24,7 @@ import { join } from 'node:path'
 export const GH_PUBLIC_CLIENT_ID = '178c6fc778ccc68e1d6a'
 export const GH_SCOPES = 'repo workflow gist read:org'
 
-const STORAGE_DIR = join(homedir(), '.dsh', 'storages', 'gitcompass')
+const STORAGE_DIR = join(homedir(), '.dsh', 'storages', 'dsh-git-manager')
 const TOKEN_FILE = join(STORAGE_DIR, 'github-token.bin')
 
 // ---------------------------------------------------------------------------

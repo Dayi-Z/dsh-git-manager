@@ -1,4 +1,4 @@
-// gitcompass 图标系统：16×16 网格、1.5 笔重、圆角端点、currentColor。
+// dsh-git-manager 图标系统：16×16 网格、1.5 笔重、圆角端点、currentColor。
 // 全部手绘内联 SVG——按 impeccable 工艺地板，禁止 emoji/Unicode 充当图标。
 import type { JSX } from 'react'
 
@@ -219,7 +219,13 @@ export function Icon({ name, size = 14, className }: { name: IconName; size?: nu
 
 // ---------------------------------------------------------------------------
 // FileIcon：文件类型图标（单一文档轮廓路径 × 按扩展名着色）
-// GitHub Linguist 语言色的面板级子集；未知扩展名回退到静默灰。
+//
+// **这里是全仓唯一允许出现色彩字面量的地方，而且是自觉的例外。**
+// 语言色是**内容**（它在标识"这是什么文件"），不是 chrome：把它换成主题
+// 令牌就等于抹掉文件类型身份。dsh-better-sidebar 对同一问题的答案是"用宿主
+// 自带的 FileTypeIcon 画稿"，我们暂时保留自绘版本，但把它圈在这一个模块里
+// ——面板的其它每一处颜色都必须走 --gm-* / --dsw-alias-* 令牌。
+// 未知扩展名回退到主题的第三级文字色，因此回退路径仍然跟随皮肤。
 // ---------------------------------------------------------------------------
 
 const FILE_LANG: Record<string, string> = {
@@ -239,7 +245,7 @@ const FILE_LANG: Record<string, string> = {
 export function FileIcon({ name, size = 13 }: { name: string; size?: number }): JSX.Element {
   const dot = name.lastIndexOf('.')
   const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : (name.startsWith('.') ? name.slice(1).toLowerCase() : '')
-  const color = FILE_LANG[ext] ?? 'var(--gc-muted, #8b949e)'
+  const color = FILE_LANG[ext] ?? 'var(--gm-fg-3, #8b949e)'
   return (
     <svg
       width={size}

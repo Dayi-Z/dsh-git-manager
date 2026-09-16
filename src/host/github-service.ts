@@ -1,10 +1,10 @@
 /**
- * gitcompass — GitHub REST wrapper (host side, token never leaves the host).
+ * dsh-git-manager — GitHub REST wrapper (host side, token never leaves the host).
  * Layered channel: direct fetch → gh CLI fallback (`gh api`) when the direct
  * connection fails (Node fetch ignores system proxy; gh applies its own
  * network config). Every endpoint in PR/Issues/GitHub tabs funnels through
  * here, so the gh channel covers all of them.
- * @module gitcompass/host/github-service
+ * @module dsh-git-manager/host/github-service
  */
 
 import { spawn } from 'node:child_process'
@@ -29,7 +29,7 @@ async function directGh<T>(method: string, path: string, body: unknown, token: s
     headers: {
       accept: 'application/vnd.github+json',
       authorization: `Bearer ${token}`,
-      'user-agent': 'gitcompass-dsh-plugin',
+      'user-agent': 'dsh-git-manager-dsh-plugin',
       ...body !== undefined ? { 'content-type': 'application/json' } : {},
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,

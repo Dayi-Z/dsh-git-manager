@@ -1,14 +1,14 @@
 /**
- * gitcompass — main panel: repo picker, guided flow strip, and the
+ * dsh-git-manager — main panel: repo picker, guided flow strip, and the
  * Branches / Changes / Graph / PRs / Issues / GitHub / Agent views.
  * The Agent view hosts the live activity monitor plus the file-level
  * approval cards (per-file tabs, full-file side-by-side compare).
- * @module gitcompass/client/Panel
+ * @module dsh-git-manager/client/Panel
  */
 
 import { Component, Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  GitcompassApi,
+  GitManagerApi,
   type BranchesView,
   type FlowSnapshot,
   type GitHubAuthState,
@@ -26,273 +26,7 @@ import { layoutGraph } from './graph.ts'
 import { useGitEvents, pendingApprovalCount, type GitEvent } from './events.ts'
 import { onOpFeedback, report, reportError, type OpFeedback } from './feedback.ts'
 import { Icon, FileIcon, type IconName } from './icons.tsx'
-
-// ---------------------------------------------------------------------------
-// Styles
-// ---------------------------------------------------------------------------
-
-const css = `
-/* Theme tokens — mirror DSH's light/dark switch (body[data-ds-dark-theme]).
-   GitHub light/dark accent palettes for correct contrast in both themes. */
-.gitcompass-panel{
-  --gc-mono:ui-monospace,SFMono-Regular,'Cascadia Code',Menlo,Consolas,'Courier New',monospace;
-  --gc-bg:#ffffff; --gc-bg-soft:#f6f7f8; --gc-fg:#1f2328;
-  --gc-hover:rgba(0,0,0,.05); --gc-border:rgba(0,0,0,.13); --gc-border-strong:rgba(0,0,0,.24);
-  --gc-shadow:0 8px 24px rgba(0,0,0,.10);
-  --gc-accent:#1a7f37; --gc-accent-soft:rgba(26,127,55,.11);
-  --gc-red:#cf222e; --gc-amber:#9a6700; --gc-info:#0969da;
-  --gc-del-bg:rgba(207,34,46,.16); --gc-add-bg:rgba(26,127,55,.18);
-  font-size:12px;line-height:1.5;color:var(--gc-fg);display:flex;flex-direction:column;height:100%;min-width:0
-}
-/* 浏览器表面也属于设计：滚动条 / 选区 / 焦点全部主题化 */
-.gitcompass-panel ::selection{background:var(--gc-accent-soft)}
-.gitcompass-panel *::-webkit-scrollbar{width:9px;height:9px}
-.gitcompass-panel *::-webkit-scrollbar-thumb{background:var(--gc-border-strong);border-radius:5px;border:2px solid transparent;background-clip:content-box}
-.gitcompass-panel *::-webkit-scrollbar-thumb:hover{background-color:var(--gc-fg);background-clip:content-box;opacity:.5}
-.gitcompass-panel *::-webkit-scrollbar-track{background:transparent}
-body[data-ds-dark-theme] .gitcompass-panel{
-  --gc-bg:#161b22; --gc-bg-soft:#1d232c; --gc-fg:#e6edf3;
-  --gc-hover:rgba(255,255,255,.06); --gc-border:rgba(255,255,255,.13); --gc-border-strong:rgba(255,255,255,.24);
-  --gc-shadow:0 8px 24px rgba(0,0,0,.35);
-  --gc-accent:#3fb950; --gc-accent-soft:rgba(63,185,80,.13);
-  --gc-red:#f85149; --gc-amber:#d29922; --gc-info:#58a6ff;
-  --gc-del-bg:rgba(248,81,73,.22); --gc-add-bg:rgba(46,160,67,.22);
-}
-.gitcompass-panel *{box-sizing:border-box;font-family:inherit}
-.gc-head{padding:8px;border-bottom:1px solid var(--gc-border)}
-.gc-repo{display:flex;gap:6px;align-items:center}
-.gc-repo select{flex:1;min-width:0;background:transparent;border:1px solid var(--gc-border);border-radius:6px;padding:3px 6px;color:var(--gc-fg);transition:border-color .12s}
-.gc-repo select option{background:var(--gc-bg);color:var(--gc-fg)}
-.gc-repo select option:checked{font-weight:600}
-.gc-repo select:focus{outline:none;border-color:var(--gc-accent)}
-.gc-addrow{display:flex;gap:6px;align-items:center;padding-top:6px}
-.gc-addrow input{flex:1;min-width:0;background:transparent;border:1px solid var(--gc-border);border-radius:6px;padding:3px 8px;color:var(--gc-fg)}
-.gc-addrow input:focus{outline:none;border-color:var(--gc-accent)}
-.gc-flow{display:flex;align-items:center;gap:2px;padding:6px 8px;border-bottom:1px solid var(--gc-border);overflow-x:auto}
-.gc-step{display:flex;align-items:center;gap:3px;white-space:nowrap;padding:2px 6px;border-radius:10px;opacity:.55}
-.gc-step.done{opacity:1;background:var(--gc-accent-soft);color:var(--gc-accent)}
-.gc-step.active{opacity:1;background:var(--gc-accent-soft);color:var(--gc-accent);outline:1px solid var(--gc-accent)}
-.gc-step .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
-.gc-step.active .dot{animation:gc-pulse 1.2s infinite}
-@keyframes gc-pulse{50%{opacity:.35}}
-.gc-arrow{opacity:.3}
-.gc-tabs,.gc-tab,.gc-tab .gc-ic{user-select:none;-webkit-user-select:none}
-.gc-tabs{display:flex;border-bottom:1px solid var(--gc-border);overflow-x:auto;padding:0 4px;gap:2px}
-.gc-tab{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:7px 2px;cursor:pointer;opacity:.6;border-bottom:2px solid transparent;white-space:nowrap;font-size:11.5px;font-weight:500;transition:opacity .15s,color .15s,border-color .15s;border-radius:0}
-.gc-tab .gc-ic{opacity:.85}
-.gc-tab:hover{opacity:1;background:var(--gc-hover)}
-.gc-tab.on{opacity:1;border-bottom-color:var(--gc-accent);color:var(--gc-accent);font-weight:600}
-.gc-body{flex:1;overflow:auto;padding:8px}
-.gc-row{display:flex;gap:6px;align-items:center;padding:3px 5px;border-radius:5px}
-/* 文件行：类型图标 + 加权文件名 + 弱化目录 + 状态字母；悬停显操作并给底色 */
-.gc-filerow{display:flex;gap:6px;align-items:center;padding:3px 5px;border-radius:5px;cursor:pointer;transition:background .12s}
-.gc-filerow:hover{background:var(--gc-hover)}
-.gc-filerow .gc-file{font-weight:500;font-size:11.5px}
-.gc-filerow .gc-path{opacity:.45;font-size:10px}
-.gc-filerow .actions{margin-left:auto}
-.gc-row:hover{background:var(--gc-hover)}
-.gc-row .gc-file{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;font-size:11.5px}
-.gc-chip{font-size:10px;padding:2px 7px;border-radius:6px;border:1px solid var(--gc-border-strong);background:var(--gc-bg-soft);opacity:.95}
-.gc-chip.green{color:var(--gc-accent);border-color:var(--gc-accent);background:var(--gc-accent-soft)}
-.gc-chip.red{color:var(--gc-red);border-color:var(--gc-red);background:var(--gc-del-bg)}
-.gc-chip.amber{color:var(--gc-amber);border-color:var(--gc-amber);background:var(--gc-add-bg)}
-.gc-chip-x{background:none;border:none;color:inherit;cursor:pointer;opacity:.6;margin-left:5px;padding:0;font-size:10px;line-height:1}
-.gc-chip-x:hover{opacity:1}
-/* 按钮：统一高度/圆角/状态；accent 只给主操作与选中态（Operate 纪律） */
-.gc-btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;background:transparent;border:1px solid var(--gc-border-strong);border-radius:6px;padding:3px 10px;cursor:pointer;color:inherit;font-size:11.5px;font-weight:500;line-height:1.5;white-space:nowrap;transition:background .15s,border-color .15s,color .15s,transform .06s}
-.gc-btn:hover{border-color:var(--gc-border-strong);background:var(--gc-hover)}
-.gc-btn:active{transform:translateY(.5px)}
-.gc-btn.sm{padding:2px 5px;min-width:22px;height:22px}
-.gc-btn.primary{background:var(--gc-accent);border-color:var(--gc-accent);color:#fff}
-.gc-btn.primary:hover{background:var(--gc-accent);filter:brightness(1.08)}
-.gc-btn.danger{border-color:var(--gc-red);color:var(--gc-red)}
-.gc-btn.danger:hover{background:var(--gc-red);border-color:var(--gc-red);color:#fff}
-.gc-btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
-.gc-btn:disabled:hover{background:transparent;border-color:var(--gc-border-strong);color:inherit}
-.gc-btn.primary:disabled:hover{background:var(--gc-accent)}
-.gc-btn.danger:disabled:hover{color:var(--gc-red);border-color:var(--gc-red)}
-.gitcompass-panel :focus-visible{outline:2px solid var(--gc-accent);outline-offset:1px}
-.gc-input{background:transparent;border:1px solid var(--gc-border-strong);border-radius:6px;padding:4px 8px;color:inherit;width:100%;transition:border-color .12s,box-shadow .12s}
-.gc-input:focus,.gc-textarea:focus{outline:none;border-color:var(--gc-accent);box-shadow:0 0 0 2px var(--gc-accent-soft)}
-.gc-input::placeholder,.gc-textarea::placeholder{opacity:.45}
-.gc-textarea{background:transparent;border:1px solid var(--gc-border-strong);border-radius:6px;padding:5px 8px;color:inherit;width:100%;resize:vertical;font-size:12px;transition:border-color .12s,box-shadow .12s}
-.gc-commit{display:flex;gap:5px;align-items:center;padding:3px 0;border-bottom:1px solid var(--gc-border)}
-.gc-commit .sha{cursor:pointer;font-family:var(--gc-mono);font-size:10px;opacity:.7}
-.gc-commit .sha:hover{opacity:1;color:var(--gc-accent)}
-.gc-commit .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gc-pr{border:1px solid var(--gc-border);border-radius:8px;padding:7px 8px;margin-bottom:6px;cursor:pointer;transition:border-color .12s,box-shadow .12s}
-.gc-pr:hover{border-color:var(--gc-accent);box-shadow:var(--gc-shadow)}
-.gc-pr .t{font-weight:600}
-.gc-muted{opacity:.6}
-.gc-err{color:var(--gc-red);padding:6px;white-space:pre-wrap}
-.gc-empty{display:flex;flex-direction:column;align-items:center;gap:6px;padding:22px 12px;text-align:center;color:var(--gc-fg)}
-.gc-empty .gc-ic{opacity:.35}
-.gc-empty .t{font-weight:600;font-size:12px}
-.gc-empty .h{opacity:.55;font-size:11px;max-width:240px}
-.gc-branch{display:flex;flex-direction:column;padding:5px 6px;border-radius:4px}
-.gc-branch:hover{background:var(--gc-hover)}
-.gc-branch .name-row{display:flex;align-items:center;gap:6px;min-width:0}
-.gc-branch .name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--gc-mono);font-size:11px}
-.gc-branch .actions{display:flex;gap:3px;margin-left:auto;flex:none}
-.gc-branch .meta{display:flex;gap:8px;align-items:center;font-size:10.5px;opacity:.85;margin-top:2px;min-width:0}
-.gc-divbar{display:inline-flex;height:6px;border-radius:3px;overflow:hidden;background:var(--gc-hover);flex:none}
-.gc-divbar .behind{background:var(--gc-red);height:100%}
-.gc-divbar .ahead{background:var(--gc-accent);height:100%}
-.gc-issue{border:1px solid var(--gc-border);border-radius:8px;padding:7px 8px;margin-bottom:6px;cursor:pointer;transition:border-color .12s,box-shadow .12s}
-.gc-issue:hover{border-color:var(--gc-accent);box-shadow:var(--gc-shadow)}
-.gc-diff{font-family:var(--gc-mono);font-size:11px;line-height:1.6;padding:4px 0;background:var(--gc-bg-soft);border-radius:6px;margin:4px 0;overflow:auto;max-height:320px;white-space:pre}
-/* 统一 diff 行级着色：删除红底 / 新增绿底（加深），hunk 与文件元信息弱化 */
-.gc-dl{display:block;padding:0 10px}
-.gc-dl.add{background:var(--gc-add-bg)}
-.gc-dl.del{background:var(--gc-del-bg)}
-.gc-dl.hunk{color:var(--gc-info);opacity:.8}
-.gc-dl.meta{opacity:.42;font-size:10px}
-/* Trae 式变更页 */
-.gc-commitbox{display:flex;gap:6px;margin-bottom:8px}
-/* 提交框内联的次要提交动作（撤销/修补）：紧凑图标钮，视觉上属于"提交"动词组 */
-.gc-commitbox .gc-btn{flex:none}
-.gc-commitbox .gc-input{flex:1;min-width:0}
-/* 变更页工具栏：统一 26px 高、图标钮等宽、允许优雅换行不粘连 */
-.gc-changes-bar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:3px 5px}
-.gc-changes-bar .gc-btn{padding:3px 9px}
-.gc-changes-bar .sep{width:1px;height:16px;background:var(--gc-border);flex:none;margin:0 2px}
-/* 传出的更改：组合卡片容器（头部行 + 提交行），与面板其余区块同一气质 */
-.gc-outsec{margin-top:10px;border:1px solid var(--gc-border);border-radius:8px;padding:6px 8px;background:var(--gc-bg-soft)}
-.gc-outsec-head{display:flex;align-items:center;gap:6px;color:var(--gc-accent);margin-bottom:2px}
-.gc-outsec-head .t{font-weight:600;font-size:11.5px}
-.gc-outsec-head .gc-chip.green{margin-left:0}
-.gc-outsec-head .gc-btn{padding:2px 9px;font-size:11px}
-.gc-outsec .gc-outrow{padding:2px 4px;border-radius:4px;cursor:pointer;transition:background .12s}
-.gc-outsec .gc-outrow:hover,.gc-outsec .gc-outrow.on{background:var(--gc-hover)}
-.gc-outrow .caret{display:inline-flex;opacity:.5;flex:none}
-.gc-outrow .who{font-size:10px;flex:none;opacity:.7}
-.gc-outdrill{margin:2px 0 4px 22px;padding-left:8px;border-left:2px solid var(--gc-border)}
-.gc-outsec-explain{font-size:10.5px;opacity:.55;margin-bottom:3px}
-.gc-outsec .gc-outrow:hover{background:var(--gc-hover)}
-/* 传出的更改行：sha 与标题之间留呼吸，标题单行省略 */
-.gc-outrow{display:flex;gap:8px;align-items:center;padding:2px 5px;min-width:0}
-.gc-outrow .sha{flex:none;font-family:var(--gc-mono);font-size:10px;opacity:.72}
-.gc-outrow .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.85}
-/* 贮藏库：紧凑行内列表 */
-.gc-stashlist{border:1px solid var(--gc-border);border-radius:6px;padding:4px 6px;margin:0 0 6px;background:var(--gc-bg-soft);display:flex;flex-direction:column;gap:1px}
-.gc-stashlist .sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gc-commitbox .gc-input{flex:1;min-width:0}
-.gc-path{opacity:.45;font-size:10px;font-family:var(--gc-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px}
-.gc-st{flex:none;font-family:var(--gc-mono);font-size:10px;font-weight:700;line-height:1;padding:3px 5px;border-radius:4px;border:1px solid var(--gc-border);opacity:.75;min-width:18px;text-align:center}
-.gc-st.add{color:var(--gc-accent);border-color:var(--gc-accent)}
-.gc-st.mod{color:var(--gc-amber);border-color:var(--gc-amber)}
-.gc-st.del{color:var(--gc-red);border-color:var(--gc-red)}
-.gc-st.ren{color:var(--gc-info);border-color:var(--gc-info)}
-.gc-folder{display:flex;gap:5px;align-items:center;padding:2px 4px;border-radius:5px;cursor:pointer;font-family:var(--gc-mono);font-size:11px}
-.gc-folder:hover{background:var(--gc-bg-soft)}
-.gc-caret{opacity:.5;font-size:9px;width:10px;flex:none}
-.gc-numstat{font-family:var(--gc-mono);font-size:10px;color:var(--gc-accent);opacity:.85}
-.gc-numstat.del{color:var(--gc-red)}
-.gc-drill .gc-file{font-size:11px;font-weight:400}
-
-/* 操作反馈横幅 + 结果卡：状态必须可见，且可追溯可复制 */
-.gc-banner{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-bottom:1px solid var(--gc-border);animation:gc-banner-in .18s ease-out}
-.gc-banner.ok{background:var(--gc-accent-soft)}
-.gc-banner.err{background:var(--gc-del-bg)}
-.gc-banner.ok>.gc-bic{color:var(--gc-accent)}
-.gc-banner.err>.gc-bic{color:var(--gc-red)}
-.gc-banner-body{flex:1;min-width:0}
-.gc-banner-body .t{font-weight:600;font-size:12px}
-.gc-banner.ok .t{color:var(--gc-accent)}
-.gc-banner.err .t{color:var(--gc-red)}
-.gc-banner-body .d{font-family:var(--gc-mono);font-size:10.5px;white-space:pre-wrap;word-break:break-word;margin:5px 0 0;padding:6px 8px;background:var(--gc-bg);border:1px solid var(--gc-border);border-radius:6px;max-height:190px;overflow:auto}
-.gc-banner-x{background:none;border:none;color:inherit;cursor:pointer;opacity:.55;padding:2px;border-radius:4px}
-.gc-banner-x:hover{opacity:1;background:var(--gc-hover)}
-@keyframes gc-banner-in{from{opacity:0;transform:translateY(-5px)}}
-.gc-review-btns{display:flex;gap:4px;margin-top:6px}
-.gc-section{margin-top:14px}
-.gc-section .head{font-weight:600;margin-bottom:6px;opacity:.55;font-size:10px;text-transform:uppercase;letter-spacing:.05em}
-.gc-lane{display:inline-block;width:12px}
-.gc-lane-line{display:inline-block;width:2px;height:16px;vertical-align:middle;border-radius:1px}
-
-/* Agent activity monitor */
-.gc-agent{display:flex;flex-direction:column;height:100%}
-.gc-agent-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--gc-border);position:sticky;top:0;background:var(--gc-bg)}
-.gc-live{color:var(--gc-accent);font-size:11px}
-.gc-live .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--gc-accent);margin-right:3px;animation:gc-pulse 1.6s infinite}
-.gc-agent-count{opacity:.5;font-size:11px;font-family:var(--gc-mono)}
-.gc-approvals{display:flex;flex-direction:column;gap:6px;padding:6px 0}
-.gc-approve-card{border:1px solid var(--gc-amber);border-radius:8px;padding:7px;background:var(--gc-add-bg)}
-.gc-approve-msg{font-weight:600}
-.gc-approve-tool{opacity:.6;font-size:11px;font-family:var(--gc-mono);margin:2px 0 5px}
-.gc-approve-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.gc-hint{opacity:0;font-size:11px;color:var(--gc-accent);transition:opacity .2s}
-.gc-approve-card.done .gc-hint{opacity:1}
-.gc-feed{display:flex;flex-direction:column-reverse;gap:2px;overflow:auto;flex:1;font-size:11px}
-.gc-evt{display:flex;gap:5px;align-items:baseline;padding:2px 4px;border-radius:4px}
-.gc-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--gc-border-strong);transform:translateY(-1px)}
-.gc-evt.run .gc-dot{background:var(--gc-info)}
-.gc-evt.ok .gc-dot{background:var(--gc-accent)}
-.gc-evt.wait .gc-dot{background:var(--gc-amber)}
-.gc-evt.err .gc-dot{background:var(--gc-red)}
-.gc-tag{flex:none;font-size:9.5px;padding:0 5px;border-radius:7px;border:1px solid var(--gc-border-strong);opacity:.8}
-.gc-evt.run .gc-tag{color:var(--gc-info);border-color:var(--gc-info)}
-.gc-evt.ok .gc-tag{color:var(--gc-accent);border-color:var(--gc-accent)}
-.gc-evt.wait .gc-tag{color:var(--gc-amber);border-color:var(--gc-amber);opacity:1}
-.gc-evt.err .gc-tag{color:var(--gc-red);border-color:var(--gc-red)}
-.gc-evt-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gc-evt.err .gc-evt-txt{white-space:pre-wrap}
-.gc-evt-time{opacity:.4;font-size:10px;font-family:var(--gc-mono)}
-
-/* File-level review: tabs + full-file side-by-side panes */
-.gc-frev{margin-top:6px;border-top:1px dashed var(--gc-border-strong);padding-top:5px}
-.gc-ftabs{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:5px}
-.gc-ftab{border:1px solid var(--gc-border);background:transparent;color:inherit;border-radius:6px;padding:2px 7px;font-size:11px;cursor:pointer;display:inline-flex;gap:5px;align-items:center;max-width:100%;transition:border-color .12s,background .12s}
-.gc-ftab:hover{border-color:var(--gc-accent)}
-.gc-ftab.on{border-color:var(--gc-accent);background:var(--gc-accent-soft)}
-.gc-ftab .p{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--gc-mono);font-size:10.5px}
-.gc-fstats{font-family:var(--gc-mono);font-size:10px}
-.gc-fstats.add{color:var(--gc-accent)}
-.gc-fstats.del{color:var(--gc-red)}
-.gc-cur-mark{color:var(--gc-accent)}
-.gc-filediff{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--gc-border);border-radius:8px;margin:2px 0 4px;background:var(--gc-bg);overflow:hidden}
-.gc-pane-head{grid-column:auto;padding:3px 8px;font-size:11px;font-weight:600;border-bottom:1px solid var(--gc-border);background:var(--gc-bg-soft)}
-.gc-pane-head.before{color:var(--gc-red)}
-.gc-pane-head.after{color:var(--gc-accent)}
-.gc-pane{overflow:auto;max-height:360px;padding:4px 0;font-family:var(--gc-mono);font-size:11px;line-height:1.55}
-.gc-ln{display:grid;grid-template-columns:38px 1fr;align-items:start}
-.gc-lno{text-align:right;padding-right:7px;opacity:.45;user-select:none;font-size:10px}
-.gc-ltxt{white-space:pre-wrap;word-break:break-word;padding-right:8px}
-.gc-line.del{background:var(--gc-del-bg)}
-.gc-line.add{background:var(--gc-add-bg)}
-.gc-trunc-note{opacity:.55;font-size:10px;padding:3px 6px}
-
-/* GitHub 式分支切换器 */
-.gc-bhead{position:relative;display:flex;align-items:center;gap:8px}
-.gc-bswitch{min-width:0}
-.gc-bpill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--gc-border-strong);border-radius:7px;padding:5px 11px;cursor:pointer;font-family:var(--gc-mono);font-size:12.5px;font-weight:600;background:transparent;color:inherit;max-width:220px;transition:border-color .15s,background .15s}
-.gc-bpill:hover{border-color:var(--gc-accent);background:var(--gc-accent-soft)}
-.gc-bpill .dot{width:8px;height:8px;border-radius:50%;background:var(--gc-accent);box-shadow:0 0 0 3px var(--gc-accent-soft)}
-.gc-bpill .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gc-bpill .cv{opacity:.45;font-size:9px;margin-left:-1px}
-.gc-bsmenu{position:absolute;left:0;top:calc(100% + 6px);z-index:30;background:var(--gc-bg);border:1px solid var(--gc-border-strong);border-radius:10px;box-shadow:var(--gc-shadow);width:min(100%,420px);max-height:340px;overflow-y:auto;padding:6px;display:flex;flex-direction:column;gap:2px}
-.gc-bsmenu .gc-input{position:sticky;top:-6px;z-index:1;background:var(--gc-bg);padding:7px 9px;margin-bottom:4px;border-radius:7px}
-.gc-bsbackdrop{position:fixed;inset:0;z-index:25}
-.gc-bsrow{display:flex;flex-direction:column;gap:2px;padding:7px 9px;border-radius:7px;cursor:pointer;transition:background .1s}
-.gc-bsrow:hover{background:var(--gc-accent-soft)}
-.gc-bsrow.on{background:var(--gc-accent-soft)}
-.gc-bsrow .n{display:flex;gap:7px;align-items:center;font-family:var(--gc-mono);font-size:11.5px;min-width:0}
-.gc-bsrow .n .cur{color:var(--gc-accent);font-size:10px}
-.gc-bsrow .n > span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gc-bsrow .m{display:flex;gap:10px;font-size:10px;opacity:.62;padding-left:17px;min-width:0}
-.gc-bssec{padding:6px 9px 2px;font-weight:600;opacity:.55;font-size:10px;text-transform:uppercase;letter-spacing:.06em}
-/* P0/P1：冲突横幅条 / 页签徽标 / 设置菜单 / 贮藏列表 */
-.gc-conflict{border:1px solid var(--gc-amber);background:rgba(210,153,34,.10);border-radius:8px;padding:6px 8px;margin-bottom:8px}
-.gc-conflict-head{display:flex;align-items:center;gap:6px;color:var(--gc-amber)}
-.gc-conflict-head .t{font-weight:600;font-size:12px}
-.gc-conflict .gc-row{color:var(--gc-fg)}
-.gc-conflict-head .gc-btn{padding:1px 8px;font-size:11px}
-.gc-badge{display:inline-flex;align-items:center;justify-content:center;min-width:15px;height:15px;padding:0 4px;margin-left:4px;border-radius:8px;background:var(--gc-amber);color:#fff;font-size:9px;font-weight:700;line-height:1}
-.gc-settings{position:absolute;top:34px;right:10px;z-index:60;display:flex;flex-direction:column;gap:6px;background:var(--gc-bg);border:1px solid var(--gc-border);border-radius:8px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);min-width:220px}
-.gc-settings-row{display:flex;align-items:center;gap:4px}
-.gc-settings-row .gc-muted{min-width:52px}
-.gc-settings-row .gc-btn{padding:2px 8px;font-size:11px}
-`
+import { css } from './styles.ts'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -303,13 +37,13 @@ body[data-ds-dark-theme] .gitcompass-panel{
 // ---------------------------------------------------------------------------
 
 /** 构建标识：设置菜单页脚显示，一眼诊断浏览器端缓存滞后（与 package.json version 同步）。 */
-const GC_VERSION = '1.6.3'
+const GM_VERSION = '2.0.0'
 
 type PollSpeed = 'fast' | 'std' | 'slow'
 const POLL_SCALE: Record<PollSpeed, number> = { fast: 0.5, std: 1, slow: 2 }
 let pollSpeed: PollSpeed = (() => {
   try {
-    const v = localStorage.getItem('gc.poll')
+    const v = localStorage.getItem('gm.poll')
     if (v === 'fast' || v === 'std' || v === 'slow') return v
   } catch { /* no storage */ }
   return 'std'
@@ -317,13 +51,13 @@ let pollSpeed: PollSpeed = (() => {
 function getPollScale(): number { return POLL_SCALE[pollSpeed] }
 function setPollSpeed(v: PollSpeed): void {
   pollSpeed = v
-  try { localStorage.setItem('gc.poll', v) } catch { /* no storage */ }
+  try { localStorage.setItem('gm.poll', v) } catch { /* no storage */ }
 }
 function getPullRebase(): boolean {
-  try { return localStorage.getItem('gc.pullRebase') === '1' } catch { return false }
+  try { return localStorage.getItem('gm.pullRebase') === '1' } catch { return false }
 }
 function setPullRebaseFlag(v: boolean): void {
-  try { localStorage.setItem('gc.pullRebase', v ? '1' : '0') } catch { /* no storage */ }
+  try { localStorage.setItem('gm.pullRebase', v ? '1' : '0') } catch { /* no storage */ }
 }
 
 function usePoll<T>(fn: () => Promise<T>, deps: unknown[], intervalMs: number): { data: T | null; error: string | null; reload: () => void } {
@@ -368,16 +102,16 @@ function OpBanner(): JSX.Element | null {
   }, [fb])
   if (!fb) return null
   return (
-    <div className={`gc-banner ${fb.kind}`} role="status">
-      <span className="gc-bic" style={{ display: 'inline-flex', marginTop: 1 }}><Icon name={fb.kind === 'ok' ? 'success' : 'alert'} size={15} /></span>
-      <div className="gc-banner-body">
+    <div className={`gm-banner ${fb.kind}`} role="status">
+      <span className="gm-bic" style={{ display: 'inline-flex', marginTop: 1 }}><Icon name={fb.kind === 'ok' ? 'success' : 'alert'} size={15} /></span>
+      <div className="gm-banner-body">
         <div className="t">{fb.title}</div>
         {fb.detail ? <pre className="d">{fb.detail}</pre> : null}
       </div>
       {fb.detail ? (
-        <button className="gc-btn sm" title={t('common.copy')} onClick={() => { void navigator.clipboard?.writeText(fb.detail ?? '').catch(() => {}) }}><Icon name="copy" size={12} /></button>
+        <button className="gm-btn sm" title={t('common.copy')} onClick={() => { void navigator.clipboard?.writeText(fb.detail ?? '').catch(() => {}) }}><Icon name="copy" size={12} /></button>
       ) : null}
-      <button className="gc-banner-x" title={t('common.close')} onClick={() => setFb(null)}><Icon name="x" size={11} /></button>
+      <button className="gm-banner-x" title={t('common.close')} onClick={() => setFb(null)}><Icon name="x" size={11} /></button>
     </div>
   )
 }
@@ -389,20 +123,30 @@ function OpBanner(): JSX.Element | null {
 function FlowStrip({ flow }: { flow: FlowSnapshot | null }) {
   const order = ['branch', 'commit', 'push', 'pr', 'review', 'merge']
   const labels: Record<string, string> = { branch: 'flow.branch', commit: 'flow.commit', push: 'flow.push', pr: 'flow.pr', review: 'flow.review', merge: 'flow.merge' }
-  if (!flow) return <div className="gc-flow"><span className="gc-muted">{t('common.loading')}</span></div>
+  if (!flow) return <div className="gm-flow"><span className="gm-muted">{t('common.loading')}</span></div>
   const stepMap = new Map(flow.steps.map((s) => [s.id, s]))
   return (
-    <div className="gc-flow" title={`${flow.repo} · ${flow.current}${flow.ahead ? ` +${flow.ahead}` : ''}${flow.behind ? ` -${flow.behind}` : ''}${flow.prNumber ? ` PR #${flow.prNumber}` : ''}`}>
+    <div className="gm-flow" title={`${flow.repo} · ${flow.current}${flow.ahead ? ` +${flow.ahead}` : ''}${flow.behind ? ` -${flow.behind}` : ''}${flow.prNumber ? ` PR #${flow.prNumber}` : ''}`}>
       {order.map((id, i) => {
         const s = stepMap.get(id)
         const cls = s?.phase === 2 ? 'done' : s?.phase === 1 ? 'active' : ''
         return (
           <Fragment key={id}>
-            {i > 0 ? <span className="gc-arrow"><Icon name="chevron-right" size={10} /></span> : null}
-            <span className={`gc-step ${cls}`}><span className="dot" />{t(labels[id])}</span>
+            {i > 0 ? <span className="gm-arrow"><Icon name="chevron-right" size={10} /></span> : null}
+            <span className={`gm-step ${cls}`}><span className="dot" />{t(labels[id])}</span>
           </Fragment>
         )
       })}
+    </div>
+  )
+}
+
+/** 空态：图标 + 标题。空态是状态陈述，不是终点。 */
+function Empty({ icon, title }: { icon: IconName; title: string }): JSX.Element {
+  return (
+    <div className="gm-empty">
+      <Icon className="gm-ic" name={icon} size={20} />
+      <div className="t">{title}</div>
     </div>
   )
 }
@@ -416,11 +160,11 @@ function DivergeBar({ ahead, behind }: { ahead: number; behind: number }): JSX.E
   const total = Math.max(1, ahead + behind)
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-      <span className="gc-divbar" title={`+${ahead} -${behind}`}>
+      <span className="gm-divbar" title={`+${ahead} -${behind}`}>
         <span className="behind" style={{ width: `${(behind / total) * 64}px` }} />
         <span className="ahead" style={{ width: `${(ahead / total) * 64}px` }} />
       </span>
-      <span style={{ fontFamily: 'var(--gc-mono)', fontSize: 10 }}>
+      <span style={{ fontFamily: 'var(--gm-mono)', fontSize: 10 }}>
         {ahead > 0 ? `↑${ahead}` : ''}{behind > 0 ? ` ↓${behind}` : ''}
       </span>
     </span>
@@ -432,7 +176,7 @@ interface BsRowProps { name: string; subject?: string; date?: string; current: b
 
 function BsRow({ name, subject, date, current, onPick }: BsRowProps): JSX.Element {
   return (
-    <div className={`gc-bsrow${current ? ' on' : ''}`} onClick={onPick} title={`${name}\n${subject ?? ''}`}>
+    <div className={`gm-bsrow${current ? ' on' : ''}`} onClick={onPick} title={`${name}\n${subject ?? ''}`}>
       <div className="n">
         {current ? <span className="cur"><Icon name="check" size={11} /></span> : null}
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
@@ -447,7 +191,7 @@ function BsRow({ name, subject, date, current, onPick }: BsRowProps): JSX.Elemen
   )
 }
 
-function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Element {
+function Branches({ api, path }: { api: GitManagerApi; path: string }): JSX.Element {
   const { data: branches, error, reload } = usePoll(() => api.branches(path), [path], 6000)
   const [busy, setBusy] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
@@ -485,15 +229,15 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
   const switcherMenu = menuOpen && branches != null ? (
     <>
       {/* 背景遮罩：点击菜单外任意处关闭 */}
-      <div className="gc-bsbackdrop" onClick={() => setMenuOpen(false)} />
-      <div className="gc-bsmenu">
-        <input className="gc-input" placeholder={t('branches.pickPlaceholder')} value={pickQuery} onChange={(e) => setPickQuery(e.target.value)} autoFocus />
+      <div className="gm-bsbackdrop" onClick={() => setMenuOpen(false)} />
+      <div className="gm-bsmenu">
+        <input className="gm-input" placeholder={t('branches.pickPlaceholder')} value={pickQuery} onChange={(e) => setPickQuery(e.target.value)} autoFocus />
         {localList.filter((b) => pickMatch(b.name)).length === 0 && remoteList.filter((b) => pickMatch(b.name)).length === 0
-          ? <div className="gc-empty">{t('branches.noBranches')}</div>
+          ? <Empty icon="git-branch" title={t('branches.noBranches')} />
           : null}
         {defaultName !== '' && pickMatch(defaultName) && localList.some((b) => b.name === defaultName) ? (
           <>
-            <div className="gc-bssec">{t('branches.default')}</div>
+            <div className="gm-bssec">{t('branches.default')}</div>
             {localList.filter((b) => b.name === defaultName).map((b) => (
               <BsRow key={b.name} name={b.name} subject={b.subject} date={b.date} current={b.current} onPick={() => { setMenuOpen(false); setPickQuery('') }} />
             ))}
@@ -501,7 +245,7 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
         ) : null}
         {localList.filter((b) => b.name !== defaultName && pickMatch(b.name)).length > 0 ? (
           <>
-            <div className="gc-bssec">{t('branches.localAll')} ({localList.filter((b) => b.name !== defaultName).length})</div>
+            <div className="gm-bssec">{t('branches.localAll')} ({localList.filter((b) => b.name !== defaultName).length})</div>
             {localList.filter((b) => b.name !== defaultName && pickMatch(b.name)).map((b) => (
               <BsRow key={b.name} name={b.name} subject={b.subject} date={b.date} current={b.current} onPick={() => {
                 setMenuOpen(false); setPickQuery('')
@@ -512,7 +256,7 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
         ) : null}
         {remoteList.filter((b) => pickMatch(b.name)).length > 0 ? (
           <>
-            <div className="gc-bssec">{t('branches.remote')} ({remoteList.length})</div>
+            <div className="gm-bssec">{t('branches.remote')} ({remoteList.length})</div>
             {remoteList.filter((b) => pickMatch(b.name)).map((b) => (
               <BsRow key={b.name} name={b.name} subject={b.subject} date={b.date} current={false} onPick={() => {
                 setMenuOpen(false); setPickQuery('')
@@ -527,12 +271,12 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
 
   return (
     <div>
-      {error && !branches ? <div className="gc-err">{error}</div> : null}
+      {error && !branches ? <div className="gm-err">{error}</div> : null}
 
       {/* 当前分支胶囊：菜单锚定到整行宽度，不再被胶囊宽度挤成窄条 */}
-      <div className="gc-bhead">
-        <div className="gc-bswitch">
-          <button className="gc-bpill" onClick={() => setMenuOpen(!menuOpen)}>
+      <div className="gm-bhead">
+        <div className="gm-bswitch">
+          <button className="gm-bpill" onClick={() => setMenuOpen(!menuOpen)}>
             <span className="dot" /><span className="nm">{branches ? branches.current : '…'}</span><span className="cv"><Icon name="chevron-down" size={11} /></span>
           </button>
           {switcherMenu}
@@ -540,57 +284,57 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
       </div>
 
       {/* 新建分支 */}
-      <div className="gc-row" style={{ marginTop: 6 }}>
-        <input className="gc-input" placeholder={t('branches.newPlaceholder')} value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && newName.trim()) doBranch('create', () => api.createBranch(path, newName.trim()).then(() => setNewName(''))) }} />
-        <button className="gc-btn primary" disabled={!newName.trim() || busy !== null} onClick={() => doBranch('create', () => api.createBranch(path, newName.trim()).then(() => setNewName('')))}>{t('branches.create')}</button>
+      <div className="gm-row" style={{ marginTop: 6 }}>
+        <input className="gm-input" placeholder={t('branches.newPlaceholder')} value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && newName.trim()) doBranch('create', () => api.createBranch(path, newName.trim()).then(() => setNewName(''))) }} />
+        <button className="gm-btn primary" disabled={!newName.trim() || busy !== null} onClick={() => doBranch('create', () => api.createBranch(path, newName.trim()).then(() => setNewName('')))}>{t('branches.create')}</button>
       </div>
 
       {branches ? (
         <>
-          <div className="gc-section"><div className="head">{t('branches.local')} ({localList.length})</div></div>
+          <div className="gm-section"><div className="head">{t('branches.local')} ({localList.length})</div></div>
           {localList.filter((b) => matchFilter(b.name)).map((b) => (
-            <div className="gc-branch" key={b.name}>
+            <div className="gm-branch" key={b.name}>
               <div className="name-row" style={{ cursor: 'pointer' }} onClick={() => setExpandedLocal(expandedLocal === b.name ? null : b.name)}>
                 <span className="name" title={`${b.name}\n${b.subject}\n${b.sha}`}>
-                  {b.current ? <span className="gc-cur-mark" style={{ marginRight: 4 }}><Icon name="check" size={11} /></span> : null}{b.name}{b.current ? ` (${t('branches.current')})` : ''}
-                  {b.upstream ? <span className="gc-muted" style={{ marginLeft: 4 }}>→ {b.upstream}</span> : null}
+                  {b.current ? <span className="gm-cur-mark" style={{ marginRight: 4 }}><Icon name="check" size={11} /></span> : null}{b.name}{b.current ? ` (${t('branches.current')})` : ''}
+                  {b.upstream ? <span className="gm-muted" style={{ marginLeft: 4 }}>→ {b.upstream}</span> : null}
                 </span>
                 <span className="actions" style={{ pointerEvents: expandedLocal === b.name ? 'auto' : 'none', opacity: expandedLocal === b.name ? 1 : 0 }}>
-                  {!b.current && <button className="gc-btn" disabled={busy !== null} onClick={() => doBranch('switch', () => api.switchBranch(path, b.name))}>{t('branches.switch')}</button>}
-                  {!b.current && <button className="gc-btn" disabled={busy !== null} onClick={() => doBranch('merge', () => api.mergeBranch(path, b.name))}>{t('branches.merge')}</button>}
+                  {!b.current && <button className="gm-btn" disabled={busy !== null} onClick={() => doBranch('switch', () => api.switchBranch(path, b.name))}>{t('branches.switch')}</button>}
+                  {!b.current && <button className="gm-btn" disabled={busy !== null} onClick={() => doBranch('merge', () => api.mergeBranch(path, b.name))}>{t('branches.merge')}</button>}
                   {renameTarget === b.name ? (
                     <span style={{ display: 'flex', gap: 2 }}>
-                      <input className="gc-input" style={{ width: 100 }} value={renameVal} onChange={(e) => setRenameVal(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && renameVal.trim()) doBranch('rename', () => api.renameBranch(path, b.name, renameVal.trim()).then(() => setRenameTarget(null))) }} autoFocus />
-                      <button className="gc-btn" onClick={() => { setRenameTarget(null) }}>{t('actions.cancel')}</button>
+                      <input className="gm-input" style={{ width: 100 }} value={renameVal} onChange={(e) => setRenameVal(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && renameVal.trim()) doBranch('rename', () => api.renameBranch(path, b.name, renameVal.trim()).then(() => setRenameTarget(null))) }} autoFocus />
+                      <button className="gm-btn" onClick={() => { setRenameTarget(null) }}>{t('actions.cancel')}</button>
                     </span>
                   ) : (
-                    <button className="gc-btn" disabled={busy !== null || b.current} onClick={() => { setRenameTarget(b.name); setRenameVal(b.name) }}>{t('branches.rename')}</button>
+                    <button className="gm-btn" disabled={busy !== null || b.current} onClick={() => { setRenameTarget(b.name); setRenameVal(b.name) }}>{t('branches.rename')}</button>
                   )}
-                  {!b.current && <button className="gc-btn danger" disabled={busy !== null} onClick={() => { if (confirm(`Delete branch ${b.name}?`)) doBranch('delete', () => api.deleteBranch(path, b.name)) }}>{t('branches.delete')}</button>}
+                  {!b.current && <button className="gm-btn danger" disabled={busy !== null} onClick={() => { if (confirm(`Delete branch ${b.name}?`)) doBranch('delete', () => api.deleteBranch(path, b.name)) }}>{t('branches.delete')}</button>}
                 </span>
               </div>
               <div className="meta">
                 {(b.ahead !== undefined || b.behind !== undefined) && <DivergeBar ahead={b.ahead ?? 0} behind={b.behind ?? 0} />}
-                <span className="gc-muted" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.subject}</span>
-                <span className="gc-muted" style={{ flex: 'none' }}>{b.date?.slice(0, 10)}</span>
+                <span className="gm-muted" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.subject}</span>
+                <span className="gm-muted" style={{ flex: 'none' }}>{b.date?.slice(0, 10)}</span>
               </div>
             </div>
           ))}
           {remoteList.length > 0 && (
             <>
-              <div className="gc-section"><div className="head">{t('branches.remote')} ({remoteList.length})</div></div>
+              <div className="gm-section"><div className="head">{t('branches.remote')} ({remoteList.length})</div></div>
               {remoteList.filter((b) => matchFilter(b.name)).map((b) => (
-                <div className="gc-branch" key={b.name}>
+                <div className="gm-branch" key={b.name}>
                   <div className="name-row" style={{ cursor: 'pointer' }} onClick={() => setExpandedRemote(expandedRemote === b.name ? null : b.name)}>
                     <span className="name" title={`${b.name}\n${b.subject}\n${b.sha}`}>{b.name}</span>
                     <span className="actions" style={{ pointerEvents: expandedRemote === b.name ? 'auto' : 'none', opacity: expandedRemote === b.name ? 1 : 0 }}>
-                      <button className="gc-btn" disabled={busy !== null} onClick={() => doBranch('checkout', () => api.switchBranch(path, b.name))}>{t('branches.checkout')}</button>
-                      <button className="gc-btn danger" disabled={busy !== null} onClick={() => { if (confirm(`Delete remote branch ${b.name}?`)) doBranch('deleteRemote', () => api.deleteRemoteBranch(path, b.name)) }}>{t('branches.delete')}</button>
+                      <button className="gm-btn" disabled={busy !== null} onClick={() => doBranch('checkout', () => api.switchBranch(path, b.name))}>{t('branches.checkout')}</button>
+                      <button className="gm-btn danger" disabled={busy !== null} onClick={() => { if (confirm(`Delete remote branch ${b.name}?`)) doBranch('deleteRemote', () => api.deleteRemoteBranch(path, b.name)) }}>{t('branches.delete')}</button>
                     </span>
                   </div>
                   <div className="meta">
-                    <span className="gc-muted" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.subject}</span>
-                    <span className="gc-muted" style={{ flex: 'none' }}>{b.date?.slice(0, 10)}</span>
+                    <span className="gm-muted" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.subject}</span>
+                    <span className="gm-muted" style={{ flex: 'none' }}>{b.date?.slice(0, 10)}</span>
                   </div>
                 </div>
               ))}
@@ -598,25 +342,25 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
           )}
         </>
       ) : (
-        <div className="gc-empty">{t('common.loading')}</div>
+        <div className="gm-empty">{t('common.loading')}</div>
       )}
 
       {/* 标签：教学向最小闭环（建/删/推） */}
-      <div className="gc-section" style={{ marginTop: 10 }}><div className="head"><Icon name="tag" size={12} /> {t('tags.title')}（{tags?.length ?? 0}）</div></div>
-      <div className="gc-row">
-        <input className="gc-input" placeholder={t('tags.placeholder')} value={tagName} onChange={(e) => setTagName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && tagName.trim()) void doBranch('tagCreate', () => api.tagCreate(path, tagName.trim(), tagMsg.trim() || undefined).then(() => { setTagName(''); setTagMsg('') })).then(reloadTags) }} />
-        <input className="gc-input" style={{ width: 110, flex: 'none' }} placeholder={t('tags.msgPlaceholder')} value={tagMsg} onChange={(e) => setTagMsg(e.target.value)} />
-        <button className="gc-btn" disabled={!tagName.trim() || busy !== null} onClick={() => void doBranch('tagCreate', () => api.tagCreate(path, tagName.trim(), tagMsg.trim() || undefined).then(() => { setTagName(''); setTagMsg('') })).then(reloadTags)}><Icon name="tag" size={12} />{t('tags.create')}</button>
+      <div className="gm-section" style={{ marginTop: 10 }}><div className="head"><Icon name="tag" size={12} /> {t('tags.title')}（{tags?.length ?? 0}）</div></div>
+      <div className="gm-row">
+        <input className="gm-input" placeholder={t('tags.placeholder')} value={tagName} onChange={(e) => setTagName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && tagName.trim()) void doBranch('tagCreate', () => api.tagCreate(path, tagName.trim(), tagMsg.trim() || undefined).then(() => { setTagName(''); setTagMsg('') })).then(reloadTags) }} />
+        <input className="gm-input" style={{ width: 110, flex: 'none' }} placeholder={t('tags.msgPlaceholder')} value={tagMsg} onChange={(e) => setTagMsg(e.target.value)} />
+        <button className="gm-btn" disabled={!tagName.trim() || busy !== null} onClick={() => void doBranch('tagCreate', () => api.tagCreate(path, tagName.trim(), tagMsg.trim() || undefined).then(() => { setTagName(''); setTagMsg('') })).then(reloadTags)}><Icon name="tag" size={12} />{t('tags.create')}</button>
       </div>
-      {(tags ?? []).length === 0 ? <div className="gc-muted" style={{ padding: '2px 4px' }}>{t('tags.none')}</div> : null}
+      {(tags ?? []).length === 0 ? <div className="gm-muted" style={{ padding: '2px 4px' }}>{t('tags.none')}</div> : null}
       {(tags ?? []).map((tag) => (
-        <div key={tag.name} className="gc-row" style={{ padding: '1px 2px' }}>
-          <span style={{ color: 'var(--gc-amber)', display: 'inline-flex', flex: 'none' }}><Icon name="tag" size={11} /></span>
+        <div key={tag.name} className="gm-row" style={{ padding: '1px 2px' }}>
+          <span style={{ color: 'var(--gm-amber)', display: 'inline-flex', flex: 'none' }}><Icon name="tag" size={11} /></span>
           <span className="sub" title={tag.name}>{tag.name}</span>
           <span style={{ flex: 1 }} />
-          {tag.date ? <span className="gc-muted" style={{ fontSize: 10 }}>{tag.date}</span> : null}
-          <button className="gc-btn sm" disabled={busy !== null} title={t('changes.push')} onClick={() => doBranch('tagPush', () => api.tagPush(path, tag.name))}><Icon name="arrow-up" size={12} /></button>
-          <button className="gc-btn sm" disabled={busy !== null} title={t('branches.delete')} onClick={() => doBranch('tagDelete', () => api.tagDelete(path, tag.name))}><Icon name="trash" size={12} /></button>
+          {tag.date ? <span className="gm-muted" style={{ fontSize: 10 }}>{tag.date}</span> : null}
+          <button className="gm-btn sm" disabled={busy !== null} title={t('changes.push')} onClick={() => doBranch('tagPush', () => api.tagPush(path, tag.name))}><Icon name="arrow-up" size={12} /></button>
+          <button className="gm-btn sm" disabled={busy !== null} title={t('branches.delete')} onClick={() => doBranch('tagDelete', () => api.tagDelete(path, tag.name))}><Icon name="trash" size={12} /></button>
         </div>
       ))}
     </div>
@@ -633,17 +377,17 @@ function Branches({ api, path }: { api: GitcompassApi; path: string }): JSX.Elem
 
 function DiffView({ patch, loading }: { patch: string; loading?: boolean }): JSX.Element {
   const lines = useMemo(() => patch.split('\n'), [patch])
-  if (loading) return <div className="gc-diff">{t('common.loading')}</div>
-  if (!patch) return <div className="gc-diff gc-muted">{t('diff.empty')}</div>
+  if (loading) return <div className="gm-diff">{t('common.loading')}</div>
+  if (!patch) return <div className="gm-diff gm-muted">{t('diff.empty')}</div>
   return (
-    <div className="gc-diff">
+    <div className="gm-diff">
       {lines.map((l, i) => {
         let cls = ''
         if (l.startsWith('diff ') || l.startsWith('index ') || l.startsWith('--- ') || l.startsWith('+++ ')) cls = 'meta'
         else if (l.startsWith('@@')) cls = 'hunk'
         else if (l.startsWith('+')) cls = 'add'
         else if (l.startsWith('-')) cls = 'del'
-        return <span key={i} className={`gc-dl ${cls}`}>{l === '' ? '\u00a0' : l}</span>
+        return <span key={i} className={`gm-dl ${cls}`}>{l === '' ? '\u00a0' : l}</span>
       })}
     </div>
   )
@@ -653,7 +397,7 @@ function DiffView({ patch, loading }: { patch: string; loading?: boolean }): JSX
 // 冲突横幅条：合并/变基进行中 → 逐文件 我方/对方 + 中止/继续变基
 // ---------------------------------------------------------------------------
 
-function ConflictStrip({ api, path }: { api: GitcompassApi; path: string }): JSX.Element | null {
+function ConflictStrip({ api, path }: { api: GitManagerApi; path: string }): JSX.Element | null {
   const { data, reload } = usePoll(() => api.conflictState(path), [path], 4000)
   const [busy, setBusy] = useState(false)
   const act = async (fn: () => Promise<unknown>): Promise<void> => {
@@ -663,25 +407,25 @@ function ConflictStrip({ api, path }: { api: GitcompassApi; path: string }): JSX
   if (!data || (!data.merging && !data.rebasing && data.files.length === 0)) return null
   const kind: 'merge' | 'rebase' = data.rebasing ? 'rebase' : 'merge'
   return (
-    <div className="gc-conflict">
-      <div className="gc-conflict-head">
+    <div className="gm-conflict">
+      <div className="gm-conflict-head">
         <Icon name="alert" size={13} />
         <span className="t">{data.rebasing ? t('conflict.rebasing') : t('conflict.merging')}</span>
-        <span className="gc-muted">{data.files.length > 0 ? `${data.files.length} ${t('conflict.files')}` : t('conflict.none')}</span>
+        <span className="gm-muted">{data.files.length > 0 ? `${data.files.length} ${t('conflict.files')}` : t('conflict.none')}</span>
         <span style={{ flex: 1 }} />
         {data.rebasing && data.files.length === 0 && (
-          <button className="gc-btn primary" disabled={busy} onClick={() => void act(() => api.continueRebase(path))}>{t('conflict.continue')}</button>
+          <button className="gm-btn primary" disabled={busy} onClick={() => void act(() => api.continueRebase(path))}>{t('conflict.continue')}</button>
         )}
-        <button className="gc-btn danger" disabled={busy} onClick={() => void act(() => api.abortConflict(path, kind).then((r) => report('ok', t('op.aborted'), (r as { output?: string }).output)))}>{t('conflict.abort')}</button>
+        <button className="gm-btn danger" disabled={busy} onClick={() => void act(() => api.abortConflict(path, kind).then((r) => report('ok', t('op.aborted'), (r as { output?: string }).output)))}>{t('conflict.abort')}</button>
       </div>
       {data.files.map((f) => (
-        <div key={f.file} className="gc-row" style={{ padding: '1px 2px' }}>
-          <span className="gc-file" title={f.file}>{f.file.split('/').pop()}</span>
-          <span className="gc-path">{f.file.split('/').slice(0, -1).join('/')}</span>
-          <span className="gc-st mod" style={{ opacity: 0.9 }}>{f.code}</span>
+        <div key={f.file} className="gm-row" style={{ padding: '1px 2px' }}>
+          <span className="gm-file" title={f.file}>{f.file.split('/').pop()}</span>
+          <span className="gm-path">{f.file.split('/').slice(0, -1).join('/')}</span>
+          <span className="gm-st mod" style={{ opacity: 0.9 }}>{f.code}</span>
           <span style={{ flex: 1 }} />
-          <button className="gc-btn" disabled={busy} onClick={() => void act(() => api.resolveConflict(path, f.file, 'ours').then((r) => report('ok', t('op.resolved'), (r as { output?: string }).output)))}>{t('conflict.ours')}</button>
-          <button className="gc-btn" disabled={busy} onClick={() => void act(() => api.resolveConflict(path, f.file, 'theirs').then((r) => report('ok', t('op.resolved'), (r as { output?: string }).output)))}>{t('conflict.theirs')}</button>
+          <button className="gm-btn" disabled={busy} onClick={() => void act(() => api.resolveConflict(path, f.file, 'ours').then((r) => report('ok', t('op.resolved'), (r as { output?: string }).output)))}>{t('conflict.ours')}</button>
+          <button className="gm-btn" disabled={busy} onClick={() => void act(() => api.resolveConflict(path, f.file, 'theirs').then((r) => report('ok', t('op.resolved'), (r as { output?: string }).output)))}>{t('conflict.theirs')}</button>
         </div>
       ))}
     </div>
@@ -723,11 +467,11 @@ function stLetter(row: StatusRow, group: 'staged' | 'changes'): string {
 
 function stClass(letter: string): string {
   switch (letter) {
-    case 'A': case 'C': return 'gc-st add'
-    case 'M': case 'T': return 'gc-st mod'
-    case 'D': return 'gc-st del'
-    case 'R': return 'gc-st ren'
-    default: return 'gc-st'
+    case 'A': case 'C': return 'gm-st add'
+    case 'M': case 'T': return 'gm-st mod'
+    case 'D': return 'gm-st del'
+    case 'R': return 'gm-st ren'
+    default: return 'gm-st'
   }
 }
 
@@ -743,11 +487,11 @@ function ChangeRowTree(props: {
         const count = (() => { let n = d.files.length; for (const v of d.dirs.values()) n += 1; return n })()
         return (
           <div key={d.path}>
-            <div className="gc-folder" style={{ paddingLeft: 4 + depth * 14 }} onClick={() => toggle(d.path)}>
-              <span className="gc-caret">{open ? <Icon name="chevron-down" size={10} /> : <Icon name="chevron-right" size={10} />}</span>
-              <Icon name="folder" size={13} className="gc-fic" />
+            <div className="gm-folder" style={{ paddingLeft: 4 + depth * 14 }} onClick={() => toggle(d.path)}>
+              <span className="gm-caret">{open ? <Icon name="chevron-down" size={10} /> : <Icon name="chevron-right" size={10} />}</span>
+              <Icon name="folder" size={13} className="gm-fic" />
               <span>{d.name}</span>
-              <span className="gc-muted" style={{ fontSize: 10 }}>{count}</span>
+              <span className="gm-muted" style={{ fontSize: 10 }}>{count}</span>
             </div>
             {open ? <ChangeRowTree node={d} depth={depth + 1} expanded={expanded} toggle={toggle} renderFile={renderFile} /> : null}
           </div>
@@ -758,7 +502,7 @@ function ChangeRowTree(props: {
   )
 }
 
-function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: { ahead?: number } | null }): JSX.Element {
+function Changes({ api, path, flow }: { api: GitManagerApi; path: string; flow: { ahead?: number } | null }): JSX.Element {
   const { data, error, reload } = usePoll(() => api.status(path), [path], 4000)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -847,19 +591,19 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
     const dir = row.newPath.lastIndexOf('/') === -1 ? '' : row.newPath.slice(0, row.newPath.lastIndexOf('/'))
     return (
       <div>
-        <div className="gc-filerow" onClick={() => { void showDiff(row.file) }}>
+        <div className="gm-filerow" onClick={() => { void showDiff(row.file) }}>
           <FileIcon name={row.newPath.split('/').pop() ?? row.newPath} />
-          <span className="gc-file" style={{ cursor: 'pointer', fontWeight: 500 }} title={row.file}>{row.newPath.split('/').pop()}</span>
-          {dir !== '' ? <span className="gc-path">{dir}</span> : null}
+          <span className="gm-file" style={{ cursor: 'pointer', fontWeight: 500 }} title={row.file}>{row.newPath.split('/').pop()}</span>
+          {dir !== '' ? <span className="gm-path">{dir}</span> : null}
           <span style={{ flex: 1 }} />
           <span className="actions" style={{ display: 'flex', gap: 2, opacity: 0, transition: 'opacity .15s' }} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1' }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0' }}>
             {kind === 'staged' ? (
-              <button className="gc-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); act('unstage', () => api.unstage(path, row.file)) }} title={t('actions.unstage')}><Icon name="minus" size={13} /></button>
+              <button className="gm-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); act('unstage', () => api.unstage(path, row.file)) }} title={t('actions.unstage')}><Icon name="minus" size={13} /></button>
             ) : (
               <>
-                <button className="gc-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); act('stage', () => api.stage(path, row.file)) }} title={t('actions.stage')}><Icon name="plus" size={13} /></button>
-                <button className="gc-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); if (confirm(t('changes.confirmDiscard'))) void act('discard', () => api.discard(path, row.file)) }} title={t('actions.discard')}><Icon name="undo" size={13} /></button>
-                {row.untracked && <button className="gc-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); void act('ignore', () => api.gitignoreAdd(path, row.file)) }} title={t('gitignore.add')}><Icon name="ban" size={13} /></button>}
+                <button className="gm-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); act('stage', () => api.stage(path, row.file)) }} title={t('actions.stage')}><Icon name="plus" size={13} /></button>
+                <button className="gm-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); if (confirm(t('changes.confirmDiscard'))) void act('discard', () => api.discard(path, row.file)) }} title={t('actions.discard')}><Icon name="undo" size={13} /></button>
+                {row.untracked && <button className="gm-btn sm" disabled={busy !== null} onClick={(e) => { e.stopPropagation(); void act('ignore', () => api.gitignoreAdd(path, row.file)) }} title={t('gitignore.add')}><Icon name="ban" size={13} /></button>}
               </>
             )}
           </span>
@@ -867,7 +611,7 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
         </div>
         {diffFile === row.file && (
           diffFailed
-            ? <div className="gc-trunc-note">{t('diff.failed')}</div>
+            ? <div className="gm-trunc-note">{t('diff.failed')}</div>
             : <DiffView patch={diffLoading ? '' : diffData} loading={diffLoading} />
         )}
       </div>
@@ -880,57 +624,57 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
 
   return (
     <div>
-      <div className="gc-commitbox">
-        <input className="gc-input" value={message} onChange={(e) => setMessage(e.target.value)}
+      <div className="gm-commitbox">
+        <input className="gm-input" value={message} onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) doCommit() }}
           placeholder={t('changes.commitPlaceholder')} />
-        <button className="gc-btn primary" onClick={doCommit} disabled={busy !== null || !message.trim()}>{t('changes.commit')}</button>
-        <button className="gc-btn sm" disabled={busy !== null} title={`${t('undo.commit')} — ${t('op.undone')}`} onClick={() => void act('undo', () => api.undoCommit(path))}><Icon name="clock-reverse" size={13} /></button>
-        <button className="gc-btn sm" disabled={busy !== null} title={t('amend.last')} onClick={() => void act('amend', () => api.amend(path))}><Icon name="commit" size={13} /></button>
+        <button className="gm-btn primary" onClick={doCommit} disabled={busy !== null || !message.trim()}>{t('changes.commit')}</button>
+        <button className="gm-btn sm" disabled={busy !== null} title={`${t('undo.commit')} — ${t('op.undone')}`} onClick={() => void act('undo', () => api.undoCommit(path))}><Icon name="clock-reverse" size={13} /></button>
+        <button className="gm-btn sm" disabled={busy !== null} title={t('amend.last')} onClick={() => void act('amend', () => api.amend(path))}><Icon name="commit" size={13} /></button>
       </div>
-      <div className="gc-changes-bar">
-        <button className="gc-btn sm" onClick={() => setTreeView(!treeView)} title={treeView ? t('changes.flat') : t('changes.tree')}>
+      <div className="gm-changes-bar">
+        <button className="gm-btn sm" onClick={() => setTreeView(!treeView)} title={treeView ? t('changes.flat') : t('changes.tree')}>
           <Icon name={treeView ? 'list' : 'folder-tree'} size={13} />
         </button>
-        <button className="gc-btn" onClick={() => act('stage', () => api.stageAll(path))} disabled={busy !== null}>{t('changes.stageAll')}</button>
+        <button className="gm-btn" onClick={() => act('stage', () => api.stageAll(path))} disabled={busy !== null}>{t('changes.stageAll')}</button>
         <span className="sep" />
-        <button className="gc-btn" onClick={() => act('fetch', () => api.fetch(path))} disabled={busy !== null}>{t('changes.fetch')}</button>
+        <button className="gm-btn" onClick={() => act('fetch', () => api.fetch(path))} disabled={busy !== null}>{t('changes.fetch')}</button>
         <button
-          className={`gc-btn${pullRebase ? ' primary' : ''}`}
+          className={`gm-btn${pullRebase ? ' primary' : ''}`}
           title={t('pull.rebase')}
           onClick={() => { const next = !pullRebase; setPullRebaseState(next); setPullRebaseFlag(next) }}
         >{pullRebase ? t('pull.rebase') : t('changes.pull')}</button>
-        <button className="gc-btn sm" onClick={() => act('pull', () => api.pull(path, pullRebase))} disabled={busy !== null} title={pullRebase ? t('pull.rebase') : t('changes.pull')}>
+        <button className="gm-btn sm" onClick={() => act('pull', () => api.pull(path, pullRebase))} disabled={busy !== null} title={pullRebase ? t('pull.rebase') : t('changes.pull')}>
           <Icon name="arrow-down" size={13} />
         </button>
-        <button className="gc-btn" onClick={() => act('push', () => api.push(path))} disabled={busy !== null}>{t('changes.push')}{(flow?.ahead ?? 0) > 0 ? ` ↑${flow?.ahead}` : ''}</button>
+        <button className="gm-btn" onClick={() => act('push', () => api.push(path))} disabled={busy !== null}>{t('changes.push')}{(flow?.ahead ?? 0) > 0 ? ` ↑${flow?.ahead}` : ''}</button>
         <span className="sep" />
-        <button className="gc-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPush(path))}>{t('stash.push')}</button>
-        <button className="gc-btn sm" disabled={busy !== null || stashRows.length === 0} title={t('stash.pop')} onClick={() => void act('stash', () => api.stashPop(path)).then(reloadStash)}><Icon name="undo" size={13} /></button>
-        <button className={`gc-btn sm${stashOpen ? ' primary' : ''}`} onClick={() => setStashOpen(!stashOpen)} title={t('stash.list')}>
+        <button className="gm-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPush(path))}>{t('stash.push')}</button>
+        <button className="gm-btn sm" disabled={busy !== null || stashRows.length === 0} title={t('stash.pop')} onClick={() => void act('stash', () => api.stashPop(path)).then(reloadStash)}><Icon name="undo" size={13} /></button>
+        <button className={`gm-btn sm${stashOpen ? ' primary' : ''}`} onClick={() => setStashOpen(!stashOpen)} title={t('stash.list')}>
           <Icon name="archive" size={13} />{stashRows.length > 0 ? <span style={{ fontSize: 10 }}>{stashRows.length}</span> : null}
         </button>
-        <span className="gc-muted" style={{ marginLeft: 'auto', fontSize: 10, flex: 'none' }}>{data?.ok === true && lines.length === 0 ? t('changes.clean') : `${lines.length} files`}</span>
+        <span className="gm-muted" style={{ marginLeft: 'auto', fontSize: 10, flex: 'none' }}>{data?.ok === true && lines.length === 0 ? t('changes.clean') : `${lines.length} files`}</span>
       </div>
       {stashOpen && stashRows.length > 0 ? (
-        <div className="gc-stashlist">
+        <div className="gm-stashlist">
           {stashRows.map((s) => (
-            <div key={s.ref} className="gc-row" style={{ padding: '1px 2px' }}>
+            <div key={s.ref} className="gm-row" style={{ padding: '1px 2px' }}>
               <span className="sha">{s.ref}</span>
               <span className="sub" title={s.subject}>{s.subject}</span>
               <span style={{ flex: 1 }} />
-              <button className="gc-btn sm" disabled={busy !== null} title={t('stash.apply')} onClick={() => void act('stashApply', () => api.stashAction(path, 'apply', s.ref)).then(reloadStash)}><Icon name="check" size={12} /></button>
-              <button className="gc-btn sm" disabled={busy !== null} title={t('stash.drop')} onClick={() => { if (confirm(t('stash.dropConfirm'))) void act('stashDrop', () => api.stashAction(path, 'drop', s.ref)).then(reloadStash) }}><Icon name="trash" size={12} /></button>
+              <button className="gm-btn sm" disabled={busy !== null} title={t('stash.apply')} onClick={() => void act('stashApply', () => api.stashAction(path, 'apply', s.ref)).then(reloadStash)}><Icon name="check" size={12} /></button>
+              <button className="gm-btn sm" disabled={busy !== null} title={t('stash.drop')} onClick={() => { if (confirm(t('stash.dropConfirm'))) void act('stashDrop', () => api.stashAction(path, 'drop', s.ref)).then(reloadStash) }}><Icon name="trash" size={12} /></button>
             </div>
           ))}
         </div>
       ) : null}
-      {error ? <div className="gc-err">{error}</div> : null}
+      {error ? <div className="gm-err">{error}</div> : null}
       {groups.map(({ key, label, rows: groupRows, kind }) => {
         if (!groupRows.length) return null
         return (
           <div key={key}>
-            <div className="gc-muted" style={{ marginTop: 6 }}>{label}（{groupRows.length}）</div>
+            <div className="gm-muted" style={{ marginTop: 6 }}>{label}（{groupRows.length}）</div>
             {treeView
               ? <ChangeRowTree node={treeOf(kind)} depth={0} expanded={expanded} toggle={toggleDir} renderFile={renderRow(kind)} />
               : groupRows.map(renderRow(kind))}
@@ -938,44 +682,44 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
         )
       })}
       {outCommits.length > 0 ? (
-        <div className="gc-outsec">
-          <div className="gc-outsec-head">
+        <div className="gm-outsec">
+          <div className="gm-outsec-head">
             <Icon name="arrow-up" size={12} />
             <span className="t">{t('changes.outgoing')}</span>
-            <span className="gc-chip green">{outCommits.length}</span>
+            <span className="gm-chip green">{outCommits.length}</span>
             <span style={{ flex: 1 }} />
-            <button className="gc-btn primary" disabled={busy !== null} onClick={() => act('push', () => api.push(path))}>
+            <button className="gm-btn primary" disabled={busy !== null} onClick={() => act('push', () => api.push(path))}>
               <Icon name="arrow-up" size={11} />{t('changes.push')} ↑{outCommits.length}
             </button>
-            <button className="gc-btn" disabled={busy !== null} title={t('changes.pushApiHint')} onClick={() => act('apipush', () => api.apiPush(path))}>
+            <button className="gm-btn" disabled={busy !== null} title={t('changes.pushApiHint')} onClick={() => act('apipush', () => api.apiPush(path))}>
               <Icon name="globe" size={11} />{t('changes.pushApi')}
             </button>
           </div>
-          <div className="gc-outsec-explain">{t('outgoing.explain')}</div>
+          <div className="gm-outsec-explain">{t('outgoing.explain')}</div>
           {outCommits.map((c) => (
             <div key={c.sha}>
               <div
-                className={`gc-outrow${outOpenSha === c.sha ? ' on' : ''}`}
+                className={`gm-outrow${outOpenSha === c.sha ? ' on' : ''}`}
                 title={`${c.author ?? ''}${c.author ? ' · ' : ''}${c.date ? c.date.slice(0, 10) : ''}\n${c.subject}\n${t('outgoing.rowHint')}`}
                 onClick={() => { void toggleOut(c.sha) }}
               >
                 <span className="caret"><Icon name={outOpenSha === c.sha ? 'chevron-down' : 'chevron-right'} size={10} /></span>
                 <span className="sha">{c.sha}</span>
                 <span className="sub">{c.subject}</span>
-                <span className="gc-muted who">{c.author}</span>
+                <span className="gm-muted who">{c.author}</span>
               </div>
               {outOpenSha === c.sha ? (
-                <div className="gc-outdrill">
-                  {outDrillLoading ? <div className="gc-muted" style={{ fontSize: 11 }}>{t('common.loading')}</div> : null}
-                  {!outDrillLoading && outFiles.length === 0 ? <div className="gc-muted" style={{ fontSize: 11 }}>{t('outgoing.noFiles')}</div> : null}
+                <div className="gm-outdrill">
+                  {outDrillLoading ? <div className="gm-muted" style={{ fontSize: 11 }}>{t('common.loading')}</div> : null}
+                  {!outDrillLoading && outFiles.length === 0 ? <div className="gm-muted" style={{ fontSize: 11 }}>{t('outgoing.noFiles')}</div> : null}
                   {outFiles.map((f) => (
                     <div key={f.path}>
-                      <div className="gc-row" style={{ padding: '1px 0' }}>
-                        <span className="gc-file" style={{ cursor: 'pointer', fontSize: 11 }} title={f.path} onClick={() => { void openOutPatch(c.sha, f.path) }}>{f.path.split('/').pop()}</span>
-                        <span className="gc-path">{f.path.split('/').slice(0, -1).join('/')}</span>
+                      <div className="gm-row" style={{ padding: '1px 0' }}>
+                        <span className="gm-file" style={{ cursor: 'pointer', fontSize: 11 }} title={f.path} onClick={() => { void openOutPatch(c.sha, f.path) }}>{f.path.split('/').pop()}</span>
+                        <span className="gm-path">{f.path.split('/').slice(0, -1).join('/')}</span>
                         <span style={{ flex: 1 }} />
-                        {f.additions !== null ? <span className="gc-numstat">+{f.additions}</span> : null}
-                        {f.deletions !== null ? <span className="gc-numstat del">−{f.deletions}</span> : null}
+                        {f.additions !== null ? <span className="gm-numstat">+{f.additions}</span> : null}
+                        {f.deletions !== null ? <span className="gm-numstat del">−{f.deletions}</span> : null}
                       </div>
                       {outFile === f.path ? <DiffView patch={outPatch} loading={outPatchLoading} /> : null}
                     </div>
@@ -994,7 +738,7 @@ function Changes({ api, path, flow }: { api: GitcompassApi; path: string; flow: 
 // Graph tab
 // ---------------------------------------------------------------------------
 
-function Graph({ api, path }: { api: GitcompassApi; path: string }): JSX.Element {
+function Graph({ api, path }: { api: GitManagerApi; path: string }): JSX.Element {
   const { data } = usePoll<GraphView>(() => api.graph(path), [path], 8000)
   const [busySha, setBusySha] = useState<string | null>(null)
   // P1：历史过滤（作者 / 提交信息，大小写不敏感子串；纯客户端）
@@ -1034,46 +778,47 @@ function Graph({ api, path }: { api: GitcompassApi; path: string }): JSX.Element
     try { const r = await api.commitPatch(path, sha, file); setPatch(r.patch) } catch { setPatch('') } finally { setPatchLoading(false) }
   }
 
-  if (!data) return <div className="gc-empty">{t('common.loading')}</div>
+  if (!data) return <div className="gm-empty">{t('common.loading')}</div>
 
-  const laneColors = ['#58a6ff', '#2ea043', '#d29922', '#f85149', '#bc8cff', '#39d353', '#f0883e', '#db61a2']
+  // 图谱泳道色不是自有调色板：它是从宿主状态令牌算出来的色轮（styles.ts）。
+  const laneColors = Array.from({ length: 8 }, (_, i) => `var(--gm-lane-${i + 1})`)
   const maxLane = layout.reduce((m, c) => Math.max(m, c.lane), 0)
 
   return (
     <div>
-      <div className="gc-row">
-        <input className="gc-input" placeholder={t('graph.filter')} value={query} onChange={(e) => setQuery(e.target.value)} />
-        {query !== '' ? <span className="gc-muted" style={{ flex: 'none' }}>{layout.length}</span> : null}
+      <div className="gm-row">
+        <input className="gm-input" placeholder={t('graph.filter')} value={query} onChange={(e) => setQuery(e.target.value)} />
+        {query !== '' ? <span className="gm-muted" style={{ flex: 'none' }}>{layout.length}</span> : null}
       </div>
       {layout.map((c) => (
         <div key={c.sha}>
-          <div className="gc-commit">
-            <span className="gc-lane" title={`lane ${c.lane}`}>
+          <div className="gm-commit">
+            <span className="gm-lane" title={`lane ${c.lane}`}>
               {Array.from({ length: maxLane + 1 }, (_, i) => (
-                <span key={i} className="gc-lane-line" style={{ backgroundColor: i === c.lane ? laneColors[c.lane % laneColors.length] : 'transparent', marginRight: i < maxLane ? 2 : 0 }} />
+                <span key={i} className="gm-lane-line" style={{ backgroundColor: i === c.lane ? laneColors[c.lane % laneColors.length] : 'transparent', marginRight: i < maxLane ? 2 : 0 }} />
               ))}
             </span>
             <span className="sha" style={{ cursor: 'pointer' }} title={`${c.sha}\n${c.author} ${c.date}`} onClick={() => { void toggleSha(c.sha) }}>{c.sha.slice(0, 7)}</span>
             <span className="sub" style={{ cursor: 'pointer' }} onClick={() => { void toggleSha(c.sha) }}>{c.subject}</span>
-            {openSha === c.sha ? <span className="gc-caret"><Icon name="chevron-down" size={10} /></span> : null}
-            {c.prNumber ? <span className="gc-chip green">PR #{c.prNumber}</span> : null}
-            <span className="gc-muted" style={{ fontSize: 10 }}>{c.author}</span>
+            {openSha === c.sha ? <span className="gm-caret"><Icon name="chevron-down" size={10} /></span> : null}
+            {c.prNumber ? <span className="gm-chip green">PR #{c.prNumber}</span> : null}
+            <span className="gm-muted" style={{ fontSize: 10 }}>{c.author}</span>
             <span className="actions" style={{ display: 'flex', gap: 2, opacity: 0, transition: 'opacity .15s' }} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1' }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0' }}>
-              <button className="gc-btn sm" disabled={busySha !== null} onClick={() => doOp(c.sha, () => api.cherryPick(path, c.sha), 'op.cherryPicked')} title={t('graph.cherryPick')}><Icon name="commit" size={12} /></button>
-              <button className="gc-btn sm" disabled={busySha !== null} onClick={() => doOp(c.sha, () => api.revertCommit(path, c.sha), 'op.reverted')} title={t('graph.revert')}><Icon name="clock-reverse" size={12} /></button>
+              <button className="gm-btn sm" disabled={busySha !== null} onClick={() => doOp(c.sha, () => api.cherryPick(path, c.sha), 'op.cherryPicked')} title={t('graph.cherryPick')}><Icon name="commit" size={12} /></button>
+              <button className="gm-btn sm" disabled={busySha !== null} onClick={() => doOp(c.sha, () => api.revertCommit(path, c.sha), 'op.reverted')} title={t('graph.revert')}><Icon name="clock-reverse" size={12} /></button>
             </span>
           </div>
           {openSha === c.sha ? (
-            <div className="gc-drill" style={{ margin: '2px 0 6px 18px', borderLeft: '2px solid var(--gc-border)', paddingLeft: 8 }}>
-              {drillLoading ? <div className="gc-muted" style={{ fontSize: 11 }}>{t('common.loading')}</div> : null}
-              {!drillLoading && openFiles.length === 0 ? <div className="gc-muted" style={{ fontSize: 11 }}>{t('graph.noFiles')}</div> : null}
+            <div className="gm-drill" style={{ margin: '2px 0 6px 18px', borderLeft: '2px solid var(--gm-border)', paddingLeft: 8 }}>
+              {drillLoading ? <div className="gm-muted" style={{ fontSize: 11 }}>{t('common.loading')}</div> : null}
+              {!drillLoading && openFiles.length === 0 ? <div className="gm-muted" style={{ fontSize: 11 }}>{t('graph.noFiles')}</div> : null}
               {openFiles.map((f) => (
                 <div key={f.path}>
-                  <div className="gc-row" style={{ padding: '1px 0' }}>
-                    <span className="gc-file" style={{ cursor: 'pointer', fontSize: 11 }} title={f.path} onClick={() => { void openPatch(c.sha, f.path) }}>{f.path.split('/').pop()}</span>
+                  <div className="gm-row" style={{ padding: '1px 0' }}>
+                    <span className="gm-file" style={{ cursor: 'pointer', fontSize: 11 }} title={f.path} onClick={() => { void openPatch(c.sha, f.path) }}>{f.path.split('/').pop()}</span>
                     <span style={{ flex: 1 }} />
-                    {f.additions !== null ? <span className="gc-numstat">+{f.additions}</span> : null}
-                    {f.deletions !== null ? <span className="gc-numstat del">−{f.deletions}</span> : null}
+                    {f.additions !== null ? <span className="gm-numstat">+{f.additions}</span> : null}
+                    {f.deletions !== null ? <span className="gm-numstat del">−{f.deletions}</span> : null}
                   </div>
                   {openFile === f.path ? <DiffView patch={patch} loading={patchLoading} /> : null}
                 </div>
@@ -1090,43 +835,43 @@ function Graph({ api, path }: { api: GitcompassApi; path: string }): JSX.Element
 // Issues tab
 // ---------------------------------------------------------------------------
 
-function Issues({ api, repoInfo, auth }: { api: GitcompassApi; repoInfo: RepoInfo | null; auth: GitHubAuthState | null }): JSX.Element {
+function Issues({ api, repoInfo, auth }: { api: GitManagerApi; repoInfo: RepoInfo | null; auth: GitHubAuthState | null }): JSX.Element {
   const { data: issues, reload } = usePoll<IssueSummary[]>(
     () => (repoInfo ? api.listIssues(repoInfo.owner, repoInfo.repo, 'open') : Promise.resolve([])),
     [repoInfo?.owner, repoInfo?.repo],
     10000,
   )
   // 未连接的两种原因：账号已连但 origin 不是 GitHub / 账号本身未连接。
-  if (!repoInfo) return <div className="gc-empty">{auth?.connected ? t('github.originIssue') : t('github.notConnected')}</div>
+  if (!repoInfo) return <Empty icon="globe" title={auth?.connected ? t('github.originIssue') : t('github.notConnected')} />
   const [detail, setDetail] = useState<IssueDetail | null>(null)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ title: '', body: '' })
   const [commentBody, setCommentBody] = useState('')
   const [busy, setBusy] = useState(false)
 
-  if (!repoInfo.connected) return <div className="gc-empty">{auth?.connected ? t('github.originIssue') : t('github.notConnected')}</div>
+  if (!repoInfo.connected) return <Empty icon="globe" title={auth?.connected ? t('github.originIssue') : t('github.notConnected')} />
 
   if (detail) {
     return (
       <div>
-        <button className="gc-btn" onClick={() => { setDetail(null); setCommentBody('') }}>{t('common.back')}</button>
+        <button className="gm-btn" onClick={() => { setDetail(null); setCommentBody('') }}>{t('common.back')}</button>
         <h3 style={{ margin: '6px 0' }}>#{detail.number} {detail.title}</h3>
-        <div className="gc-row">
-          <span className={`gc-chip ${detail.state === 'open' ? 'amber' : 'red'}`}>{detail.state}</span>
-          <span className="gc-muted">{detail.user} · {detail.createdAt?.slice(0, 10)}</span>
+        <div className="gm-row">
+          <span className={`gm-chip ${detail.state === 'open' ? 'amber' : 'red'}`}>{detail.state}</span>
+          <span className="gm-muted">{detail.user} · {detail.createdAt?.slice(0, 10)}</span>
         </div>
-        {detail.labels.length > 0 && <div className="gc-row" style={{ marginTop: 4 }}>{detail.labels.map((l) => <span key={l} className="gc-chip">{l}</span>)}</div>}
-        {detail.body ? <div className="gc-muted" style={{ whiteSpace: 'pre-wrap', marginTop: 6, padding: 8, background: 'rgba(128,128,128,.04)', borderRadius: 4 }}>{detail.body}</div> : null}
-        <div className="gc-section"><div className="head">{t('issues.comments')} ({detail.comments.length})</div></div>
+        {detail.labels.length > 0 && <div className="gm-row" style={{ marginTop: 4 }}>{detail.labels.map((l) => <span key={l} className="gm-chip">{l}</span>)}</div>}
+        {detail.body ? <div className="gm-muted" style={{ whiteSpace: 'pre-wrap', marginTop: 6, padding: 8, background: 'var(--gm-bg-soft)', borderRadius: 6 }}>{detail.body}</div> : null}
+        <div className="gm-section"><div className="head">{t('issues.comments')} ({detail.comments.length})</div></div>
         {detail.comments.map((c) => (
-          <div key={c.id} style={{ padding: 6, borderBottom: '1px solid rgba(128,128,128,.1)' }}>
-            <div className="gc-row"><span className="gc-chip">{c.user}</span><span className="gc-muted">{c.createdAt?.slice(0, 10)}</span></div>
-            <div className="gc-muted" style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{c.body}</div>
+          <div key={c.id} style={{ padding: 6, borderBottom: '1px solid var(--gm-hairline)' }}>
+            <div className="gm-row"><span className="gm-chip">{c.user}</span><span className="gm-muted">{c.createdAt?.slice(0, 10)}</span></div>
+            <div className="gm-muted" style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{c.body}</div>
           </div>
         ))}
         <div style={{ marginTop: 8 }}>
-          <textarea className="gc-textarea" rows={3} placeholder={t('issues.writeComment')} value={commentBody} onChange={(e) => setCommentBody(e.target.value)} />
-          <button className="gc-btn primary" style={{ marginTop: 4 }} disabled={!commentBody.trim() || busy} onClick={async () => { setBusy(true); try { await api.commentIssue(repoInfo.owner, repoInfo.repo, detail.number, commentBody); setCommentBody(''); const d = await api.issueDetail(repoInfo.owner, repoInfo.repo, detail.number); setDetail(d) } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false) } }}>{t('issues.send')}</button>
+          <textarea className="gm-textarea" rows={3} placeholder={t('issues.writeComment')} value={commentBody} onChange={(e) => setCommentBody(e.target.value)} />
+          <button className="gm-btn primary" style={{ marginTop: 4 }} disabled={!commentBody.trim() || busy} onClick={async () => { setBusy(true); try { await api.commentIssue(repoInfo.owner, repoInfo.repo, detail.number, commentBody); setCommentBody(''); const d = await api.issueDetail(repoInfo.owner, repoInfo.repo, detail.number); setDetail(d) } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false) } }}>{t('issues.send')}</button>
         </div>
       </div>
     )
@@ -1135,26 +880,26 @@ function Issues({ api, repoInfo, auth }: { api: GitcompassApi; repoInfo: RepoInf
   if (creating) {
     return (
       <div>
-        <button className="gc-btn" onClick={() => setCreating(false)}>{t('common.back')}</button>
-        <div className="gc-row" style={{ marginTop: 6 }}><input className="gc-input" placeholder={t('issues.titleLabel')} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
-        <div className="gc-row"><textarea className="gc-textarea" rows={4} placeholder={t('issues.body')} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} /></div>
-        <button className="gc-btn primary" disabled={!form.title.trim() || busy} onClick={async () => { setBusy(true); try { await api.createIssue(repoInfo.owner, repoInfo.repo, form.title, form.body); setCreating(false); reload() } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false) } }}>{t('issues.createBtn')}</button>
+        <button className="gm-btn" onClick={() => setCreating(false)}>{t('common.back')}</button>
+        <div className="gm-row" style={{ marginTop: 6 }}><input className="gm-input" placeholder={t('issues.titleLabel')} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
+        <div className="gm-row"><textarea className="gm-textarea" rows={4} placeholder={t('issues.body')} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} /></div>
+        <button className="gm-btn primary" disabled={!form.title.trim() || busy} onClick={async () => { setBusy(true); try { await api.createIssue(repoInfo.owner, repoInfo.repo, form.title, form.body); setCreating(false); reload() } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false) } }}>{t('issues.createBtn')}</button>
       </div>
     )
   }
 
   return (
     <div>
-      <div className="gc-row" style={{ justifyContent: 'space-between' }}>
-        <span className="gc-muted">{issues?.length ?? 0} issues</span>
-        <button className="gc-btn primary" onClick={() => setCreating(true)}>{t('issues.create')}</button>
+      <div className="gm-row" style={{ justifyContent: 'space-between' }}>
+        <span className="gm-muted">{issues?.length ?? 0} issues</span>
+        <button className="gm-btn primary" onClick={() => setCreating(true)}>{t('issues.create')}</button>
       </div>
       {issues?.length ? issues.map((issue) => (
-        <div className="gc-issue" key={issue.number} onClick={() => { void api.issueDetail(repoInfo.owner, repoInfo.repo, issue.number).then(setDetail).catch((e) => reportError(t('op.failed'), e)) }}>
+        <div className="gm-issue" key={issue.number} onClick={() => { void api.issueDetail(repoInfo.owner, repoInfo.repo, issue.number).then(setDetail).catch((e) => reportError(t('op.failed'), e)) }}>
           <div style={{ fontWeight: 600 }}>#{issue.number} {issue.title}</div>
-          <div className="gc-muted">{issue.state} · {issue.user} · {issue.createdAt?.slice(0, 10)}{issue.commentCount > 0 ? ` · ${issue.commentCount} comments` : ''}</div>
+          <div className="gm-muted">{issue.state} · {issue.user} · {issue.createdAt?.slice(0, 10)}{issue.commentCount > 0 ? ` · ${issue.commentCount} comments` : ''}</div>
         </div>
-      )) : <div className="gc-empty">{t('issues.empty')}</div>}
+      )) : <Empty icon="issue" title={t('issues.empty')} />}
     </div>
   )
 }
@@ -1165,15 +910,15 @@ function Issues({ api, repoInfo, auth }: { api: GitcompassApi; repoInfo: RepoInf
 
 function ChecksChips({ checks }: { checks: NonNullable<PullRequestSummary['checks']> }): JSX.Element {
   return (
-    <div className="gc-row">
-      <span className="gc-chip green">{checks.passing} {t('prs.pass')}</span>
-      <span className="gc-chip red">{checks.failing} {t('prs.fail')}</span>
-      <span className="gc-chip amber">{checks.pending} {t('prs.wait')}</span>
+    <div className="gm-row">
+      <span className="gm-chip green">{checks.passing} {t('prs.pass')}</span>
+      <span className="gm-chip red">{checks.failing} {t('prs.fail')}</span>
+      <span className="gm-chip amber">{checks.pending} {t('prs.wait')}</span>
     </div>
   )
 }
 
-function PRs({ api, repoInfo, auth }: { api: GitcompassApi; repoInfo: RepoInfo | null; auth: GitHubAuthState | null }): JSX.Element {
+function PRs({ api, repoInfo, auth }: { api: GitManagerApi; repoInfo: RepoInfo | null; auth: GitHubAuthState | null }): JSX.Element {
   const { data: prs, reload } = usePoll<PullRequestSummary[]>(
     () => (repoInfo ? api.listPRs(repoInfo.owner, repoInfo.repo, 'open') : Promise.resolve([])),
     [repoInfo?.owner, repoInfo?.repo],
@@ -1188,68 +933,68 @@ function PRs({ api, repoInfo, auth }: { api: GitcompassApi; repoInfo: RepoInfo |
   const [reviewState, setReviewState] = useState<'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT' | null>(null)
 
   // 未连接的两种原因：账号已连但 origin 不是 GitHub / 账号本身未连接。
-  if (!repoInfo) return <div className="gc-empty">{auth?.connected ? t('github.originIssue') : t('github.notConnected')}</div>
-  if (!repoInfo.connected) return <div className="gc-empty">{auth?.connected ? t('github.originIssue') : t('github.notConnected')}</div>
+  if (!repoInfo) return <Empty icon="globe" title={auth?.connected ? t('github.originIssue') : t('github.notConnected')} />
+  if (!repoInfo.connected) return <Empty icon="globe" title={auth?.connected ? t('github.originIssue') : t('github.notConnected')} />
 
   if (detail) {
     return (
       <div>
-        <button className="gc-btn" onClick={() => { setDetail(null); setPrComment(''); setReviewState(null) }}>{t('common.back')}</button>
+        <button className="gm-btn" onClick={() => { setDetail(null); setPrComment(''); setReviewState(null) }}>{t('common.back')}</button>
         <h3 style={{ margin: '6px 0' }}>#{detail.number} {detail.title}</h3>
-        <div className="gc-row">
-          <span className={`gc-chip ${detail.state === 'merged' ? 'green' : detail.state === 'open' ? 'amber' : 'red'}`}>{detail.state}</span>
-          <span className="gc-muted">{detail.head} → {detail.base}</span>
+        <div className="gm-row">
+          <span className={`gm-chip ${detail.state === 'merged' ? 'green' : detail.state === 'open' ? 'amber' : 'red'}`}>{detail.state}</span>
+          <span className="gm-muted">{detail.head} → {detail.base}</span>
         </div>
         {detail.checks ? <ChecksChips checks={detail.checks} /> : null}
-        {detail.body ? <div className="gc-muted" style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{detail.body}</div> : null}
+        {detail.body ? <div className="gm-muted" style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{detail.body}</div> : null}
 
-        <div className="gc-section"><div className="head">{t('prs.checks')} ({detail.checkRuns.length})</div></div>
+        <div className="gm-section"><div className="head">{t('prs.checks')} ({detail.checkRuns.length})</div></div>
         {detail.checkRuns.map((c) => (
-          <div className="gc-row" key={c.name}>
-            <span className="gc-file">{c.name}</span>
-            <span className={`gc-chip ${c.conclusion === 'success' ? 'green' : c.conclusion === 'failure' ? 'red' : 'amber'}`}>{c.conclusion ?? c.status}</span>
+          <div className="gm-row" key={c.name}>
+            <span className="gm-file">{c.name}</span>
+            <span className={`gm-chip ${c.conclusion === 'success' ? 'green' : c.conclusion === 'failure' ? 'red' : 'amber'}`}>{c.conclusion ?? c.status}</span>
           </div>
         ))}
 
-        <div className="gc-section"><div className="head">{t('prs.reviews')} ({detail.reviews.length})</div></div>
+        <div className="gm-section"><div className="head">{t('prs.reviews')} ({detail.reviews.length})</div></div>
         {detail.reviews.map((r, i) => (
-          <div className="gc-row" key={i}><span className="gc-chip">{r.state}</span><span>{r.user}</span>{r.body ? <span className="gc-muted">{r.body.slice(0, 80)}</span> : null}</div>
+          <div className="gm-row" key={i}><span className="gm-chip">{r.state}</span><span>{r.user}</span>{r.body ? <span className="gm-muted">{r.body.slice(0, 80)}</span> : null}</div>
         ))}
 
         {detail.state === 'open' && (
-          <div className="gc-section">
+          <div className="gm-section">
             <div className="head">{t('pr.review.submit')}</div>
-            <div className="gc-review-btns">
-              <button className="gc-btn primary" onClick={() => setReviewState(reviewState === 'APPROVE' ? null : 'APPROVE')} style={reviewState === 'APPROVE' ? {} : { opacity: 0.6 }}>{t('pr.review.approve')}</button>
-              <button className="gc-btn danger" onClick={() => setReviewState(reviewState === 'REQUEST_CHANGES' ? null : 'REQUEST_CHANGES')} style={reviewState === 'REQUEST_CHANGES' ? {} : { opacity: 0.6 }}>{t('pr.review.requestChanges')}</button>
-              <button className="gc-btn" onClick={() => setReviewState(reviewState === 'COMMENT' ? null : 'COMMENT')} style={reviewState === 'COMMENT' ? {} : { opacity: 0.6 }}>{t('pr.review.comment')}</button>
+            <div className="gm-review-btns">
+              <button className="gm-btn primary" onClick={() => setReviewState(reviewState === 'APPROVE' ? null : 'APPROVE')} style={reviewState === 'APPROVE' ? {} : { opacity: 0.6 }}>{t('pr.review.approve')}</button>
+              <button className="gm-btn danger" onClick={() => setReviewState(reviewState === 'REQUEST_CHANGES' ? null : 'REQUEST_CHANGES')} style={reviewState === 'REQUEST_CHANGES' ? {} : { opacity: 0.6 }}>{t('pr.review.requestChanges')}</button>
+              <button className="gm-btn" onClick={() => setReviewState(reviewState === 'COMMENT' ? null : 'COMMENT')} style={reviewState === 'COMMENT' ? {} : { opacity: 0.6 }}>{t('pr.review.comment')}</button>
             </div>
             {reviewState && (
               <div style={{ marginTop: 4 }}>
-                <textarea className="gc-textarea" rows={3} placeholder={t('pr.review.placeholder')} value={reviewBody} onChange={(e) => setReviewBody(e.target.value)} />
-                <button className="gc-btn primary" style={{ marginTop: 4 }} disabled={busy} onClick={async () => { setBusy(true); try { await api.reviewPR(repoInfo.owner, repoInfo.repo, detail.number, reviewState, reviewBody); reload(); setDetail(null); setReviewState(null); setReviewBody('') } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false) } }}>{t('pr.review.submit')}</button>
+                <textarea className="gm-textarea" rows={3} placeholder={t('pr.review.placeholder')} value={reviewBody} onChange={(e) => setReviewBody(e.target.value)} />
+                <button className="gm-btn primary" style={{ marginTop: 4 }} disabled={busy} onClick={async () => { setBusy(true); try { await api.reviewPR(repoInfo.owner, repoInfo.repo, detail.number, reviewState, reviewBody); reload(); setDetail(null); setReviewState(null); setReviewBody('') } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false) } }}>{t('pr.review.submit')}</button>
               </div>
             )}
           </div>
         )}
 
-        <div className="gc-section">
+        <div className="gm-section">
           <div className="head">{t('prs.comments')}</div>
           {detail.comments.map((c) => (
-            <div key={c.id} style={{ padding: 4, borderBottom: '1px solid rgba(128,128,128,.1)' }}>
-              <span className="gc-chip">{c.user}</span> <span className="gc-muted">{c.path}{c.line ? `:${c.line}` : ''}</span>
-              <div className="gc-muted" style={{ whiteSpace: 'pre-wrap', marginTop: 2 }}>{c.body}</div>
+            <div key={c.id} style={{ padding: 4, borderBottom: '1px solid var(--gm-hairline)' }}>
+              <span className="gm-chip">{c.user}</span> <span className="gm-muted">{c.path}{c.line ? `:${c.line}` : ''}</span>
+              <div className="gm-muted" style={{ whiteSpace: 'pre-wrap', marginTop: 2 }}>{c.body}</div>
             </div>
           ))}
           <div style={{ marginTop: 6 }}>
-            <textarea className="gc-textarea" rows={2} placeholder={t('pr.comment.placeholder')} value={prComment} onChange={(e) => setPrComment(e.target.value)} />
-            <button className="gc-btn primary" style={{ marginTop: 4 }} disabled={!prComment.trim() || busy} onClick={async () => { setBusy(true); try { await api.commentPR(repoInfo.owner, repoInfo.repo, detail.number, prComment); setPrComment(''); reload() } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false) } }}>{t('pr.comment.send')}</button>
+            <textarea className="gm-textarea" rows={2} placeholder={t('pr.comment.placeholder')} value={prComment} onChange={(e) => setPrComment(e.target.value)} />
+            <button className="gm-btn primary" style={{ marginTop: 4 }} disabled={!prComment.trim() || busy} onClick={async () => { setBusy(true); try { await api.commentPR(repoInfo.owner, repoInfo.repo, detail.number, prComment); setPrComment(''); reload() } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false) } }}>{t('pr.comment.send')}</button>
           </div>
         </div>
 
         {detail.state === 'open' && (
-          <div className="gc-row" style={{ marginTop: 10 }}>
-            <button className="gc-btn primary" disabled={busy} onClick={async () => { setBusy(true); try { await api.mergePR(repoInfo.owner, repoInfo.repo, detail.number, 'squash'); reload(); setDetail(null) } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false) } }}>{t('prs.squash')}</button>
+          <div className="gm-row" style={{ marginTop: 10 }}>
+            <button className="gm-btn primary" disabled={busy} onClick={async () => { setBusy(true); try { await api.mergePR(repoInfo.owner, repoInfo.repo, detail.number, 'squash'); reload(); setDetail(null) } catch (e) { reportError(t('op.failed'), e) } finally { setBusy(false) } }}>{t('prs.squash')}</button>
           </div>
         )}
       </div>
@@ -1259,11 +1004,11 @@ function PRs({ api, repoInfo, auth }: { api: GitcompassApi; repoInfo: RepoInfo |
   if (creating) {
     return (
       <div>
-        <button className="gc-btn" onClick={() => setCreating(false)}>{t('common.back')}</button>
-        <div className="gc-row" style={{ marginTop: 6 }}><input className="gc-input" placeholder={t('prs.title')} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
-        <div className="gc-row"><span className="gc-muted">{t('prs.head')} {repoInfo.branch} → {t('prs.base')}</span><input className="gc-input" style={{ width: 120 }} value={form.base} onChange={(e) => setForm({ ...form, base: e.target.value })} /></div>
-        <div className="gc-row"><textarea className="gc-textarea" rows={4} placeholder="Description" value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} /></div>
-        <button className="gc-btn primary" disabled={!form.title.trim() || !repoInfo.branch} onClick={async () => {
+        <button className="gm-btn" onClick={() => setCreating(false)}>{t('common.back')}</button>
+        <div className="gm-row" style={{ marginTop: 6 }}><input className="gm-input" placeholder={t('prs.title')} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
+        <div className="gm-row"><span className="gm-muted">{t('prs.head')} {repoInfo.branch} → {t('prs.base')}</span><input className="gm-input" style={{ width: 120 }} value={form.base} onChange={(e) => setForm({ ...form, base: e.target.value })} /></div>
+        <div className="gm-row"><textarea className="gm-textarea" rows={4} placeholder="Description" value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} /></div>
+        <button className="gm-btn primary" disabled={!form.title.trim() || !repoInfo.branch} onClick={async () => {
           setBusy(true)
           try {
             await api.createPR(repoInfo.owner, repoInfo.repo, { title: form.title, body: form.body, head: repoInfo.branch, base: form.base })
@@ -1276,17 +1021,17 @@ function PRs({ api, repoInfo, auth }: { api: GitcompassApi; repoInfo: RepoInfo |
 
   return (
     <div>
-      <div className="gc-row" style={{ justifyContent: 'space-between' }}>
-        <span className="gc-muted">{t('prs.open')}</span>
-        <button className="gc-btn primary" onClick={() => setCreating(true)} disabled={!repoInfo.branch}>{t('prs.create')}</button>
+      <div className="gm-row" style={{ justifyContent: 'space-between' }}>
+        <span className="gm-muted">{t('prs.open')}</span>
+        <button className="gm-btn primary" onClick={() => setCreating(true)} disabled={!repoInfo.branch}>{t('prs.create')}</button>
       </div>
       {prs?.length ? prs.map((pr) => (
-        <div className="gc-pr" key={pr.number} onClick={() => { void api.prDetail(repoInfo.owner, repoInfo.repo, pr.number).then(setDetail).catch((e) => reportError(t('op.failed'), e)) }}>
+        <div className="gm-pr" key={pr.number} onClick={() => { void api.prDetail(repoInfo.owner, repoInfo.repo, pr.number).then(setDetail).catch((e) => reportError(t('op.failed'), e)) }}>
           <div className="t">#{pr.number} {pr.title}</div>
-          <div className="gc-muted">{pr.head} → {pr.base} · {pr.user}{pr.draft ? ` · ${t('prs.draft')}` : ''}</div>
+          <div className="gm-muted">{pr.head} → {pr.base} · {pr.user}{pr.draft ? ` · ${t('prs.draft')}` : ''}</div>
           {pr.checks ? <ChecksChips checks={pr.checks} /> : null}
         </div>
-      )) : <div className="gc-empty">{t('prs.empty')}</div>}
+      )) : <Empty icon="git-pr" title={t('prs.empty')} />}
     </div>
   )
 }
@@ -1296,7 +1041,7 @@ function PRs({ api, repoInfo, auth }: { api: GitcompassApi; repoInfo: RepoInfo |
 // ---------------------------------------------------------------------------
 
 function GitHubView({ api, path, repoInfo, auth, reloadAuth, onGotoPrs, device, deviceBusy, onStartDevice, onCheckDevice, onCancelDevice, onCloned }: {
-  api: GitcompassApi
+  api: GitManagerApi
   path: string
   repoInfo: RepoInfo | null
   auth: GitHubAuthState | null
@@ -1348,71 +1093,71 @@ function GitHubView({ api, path, repoInfo, auth, reloadAuth, onGotoPrs, device, 
     <div>
       {auth?.connected ? (
         <div>
-          <div className="gc-row"><span className="gc-chip green">{t('github.connected')}</span><span>{auth.login}</span><span className="gc-muted">({auth.source})</span></div>
-          {auth.scopes?.length ? <div className="gc-muted" style={{ marginTop: 4 }}>{t('github.scopes')}: {auth.scopes.join(', ')}</div> : null}
-          {repoInfo ? <div className="gc-row" style={{ marginTop: 6 }}><span className="gc-chip">{repoInfo.owner}/{repoInfo.repo}</span>{repoInfo.branch ? <span className="gc-muted">@{repoInfo.branch}</span> : null}{repoInfo.prNumber ? <span className="gc-chip green">PR #{repoInfo.prNumber}</span> : null}</div> : null}
-          <button className="gc-btn" style={{ marginTop: 8 }} onClick={onGotoPrs}>{t('github.gotoPrs')}</button>
-          <button className="gc-btn danger" style={{ marginTop: 8, marginLeft: 6 }} onClick={async () => { await api.logout(); reloadAuth() }}>{t('github.logout')}</button>
+          <div className="gm-row"><span className="gm-chip green">{t('github.connected')}</span><span>{auth.login}</span><span className="gm-muted">({auth.source})</span></div>
+          {auth.scopes?.length ? <div className="gm-muted" style={{ marginTop: 4 }}>{t('github.scopes')}: {auth.scopes.join(', ')}</div> : null}
+          {repoInfo ? <div className="gm-row" style={{ marginTop: 6 }}><span className="gm-chip">{repoInfo.owner}/{repoInfo.repo}</span>{repoInfo.branch ? <span className="gm-muted">@{repoInfo.branch}</span> : null}{repoInfo.prNumber ? <span className="gm-chip green">PR #{repoInfo.prNumber}</span> : null}</div> : null}
+          <button className="gm-btn" style={{ marginTop: 8 }} onClick={onGotoPrs}>{t('github.gotoPrs')}</button>
+          <button className="gm-btn danger" style={{ marginTop: 8, marginLeft: 6 }} onClick={async () => { await api.logout(); reloadAuth() }}>{t('github.logout')}</button>
 
           {connected && (
-            <div className="gc-section">
+            <div className="gm-section">
               <div className="head">{t('github.quickPrs')} ({quickPrs?.length ?? 0})</div>
               {quickPrs?.length ? quickPrs.slice(0, 5).map((p) => (
-                <div className="gc-row" key={p.number}>
-                  <span style={{ fontFamily: 'var(--gc-mono)', fontSize: 10 }}>#{p.number}</span>
-                  <span className="gc-file">{p.title}</span>
-                  <span className="gc-muted">{p.user}</span>
+                <div className="gm-row" key={p.number}>
+                  <span style={{ fontFamily: 'var(--gm-mono)', fontSize: 10 }}>#{p.number}</span>
+                  <span className="gm-file">{p.title}</span>
+                  <span className="gm-muted">{p.user}</span>
                 </div>
-              )) : <div className="gc-muted" style={{ padding: '2px 4px' }}>{t('prs.empty')}</div>}
+              )) : <div className="gm-muted" style={{ padding: '2px 4px' }}>{t('prs.empty')}</div>}
             </div>
           )}
         </div>
       ) : (
         <div>
-          <div className="gc-empty">{t('github.notConnected')}</div>
+          <Empty icon="globe" title={t('github.notConnected')} />
           {originHint !== null && (
-            <div className="gc-muted" style={{ padding: '2px 6px', marginBottom: 4 }}>
+            <div className="gm-muted" style={{ padding: '2px 6px', marginBottom: 4 }}>
               {originHint.includes('GitHub') ? t('github.originIssue') : t('github.loginFirst')}
             </div>
           )}
           {/* 令牌在握但 API 不可达/无效：给降级提示 + 重试，不再打回登录死循环。 */}
           {auth?.hasToken ? (
-            <div style={{ margin: '4px 0 8px', padding: 6, border: '1px solid rgba(210,153,34,.5)', borderRadius: 6, background: 'rgba(210,153,34,.08)' }}>
+            <div style={{ margin: '4px 0 8px', padding: 6, border: '1px solid color-mix(in srgb, var(--gm-amber) 50%, transparent)', borderRadius: 8, background: 'var(--gm-amber-soft)' }}>
               <div>{auth.invalidToken ? t('github.invalidToken') : t('github.savedToken')}</div>
-              {!auth.invalidToken && auth.reachabilityError ? <div className="gc-muted" style={{ fontSize: 10, marginTop: 2 }}>{auth.reachabilityError}</div> : null}
-              <button className="gc-btn" style={{ marginTop: 4 }} onClick={reloadAuth}>{t('common.retry')}</button>
+              {!auth.invalidToken && auth.reachabilityError ? <div className="gm-muted" style={{ fontSize: 10, marginTop: 2 }}>{auth.reachabilityError}</div> : null}
+              <button className="gm-btn" style={{ marginTop: 4 }} onClick={reloadAuth}>{t('common.retry')}</button>
             </div>
           ) : null}
           {device ? (
             <div>
-              <div className="gc-row"><span className="gc-chip amber">{t('github.code')}: <b>{device.userCode}</b></span></div>
-              <div className="gc-row"><a className="gc-btn" href={device.verificationUri} target="_blank" rel="noreferrer">{t('github.openUrl')}</a></div>
-              <div className="gc-muted" style={{ padding: 4 }}>{t('github.loginHint')}</div>
-              <button className="gc-btn primary" onClick={onCheckDevice} disabled={deviceBusy}>{t('github.checkNow')}</button>
-              <button className="gc-btn" style={{ marginLeft: 6 }} onClick={onCancelDevice} disabled={deviceBusy}>{t('actions.cancel')}</button>
+              <div className="gm-row"><span className="gm-chip amber">{t('github.code')}: <b>{device.userCode}</b></span></div>
+              <div className="gm-row"><a className="gm-btn" href={device.verificationUri} target="_blank" rel="noreferrer">{t('github.openUrl')}</a></div>
+              <div className="gm-muted" style={{ padding: 4 }}>{t('github.loginHint')}</div>
+              <button className="gm-btn primary" onClick={onCheckDevice} disabled={deviceBusy}>{t('github.checkNow')}</button>
+              <button className="gm-btn" style={{ marginLeft: 6 }} onClick={onCancelDevice} disabled={deviceBusy}>{t('actions.cancel')}</button>
             </div>
           ) : (
-            <button className="gc-btn primary" onClick={onStartDevice} disabled={deviceBusy}>{t('github.login')}</button>
+            <button className="gm-btn primary" onClick={onStartDevice} disabled={deviceBusy}>{t('github.login')}</button>
           )}
           <div style={{ marginTop: 12 }}>
-            <div className="gc-muted">{t('github.pat')}</div>
-            <div className="gc-row">
-              <input className="gc-input" type="password" value={pat} onChange={(e) => setPat(e.target.value)} />
-              <button className="gc-btn" onClick={savePat} disabled={!pat.trim()}>{t('github.patBtn')}</button>
+            <div className="gm-muted">{t('github.pat')}</div>
+            <div className="gm-row">
+              <input className="gm-input" type="password" value={pat} onChange={(e) => setPat(e.target.value)} />
+              <button className="gm-btn" onClick={savePat} disabled={!pat.trim()}>{t('github.patBtn')}</button>
             </div>
           </div>
         </div>
       )}
 
       {/* P1：克隆仓库入架 */}
-      <div className="gc-section" style={{ marginTop: 14 }}><div className="head"><Icon name="globe" size={12} /> {t('clone.title')}</div></div>
-      <div className="gc-row">
-        <input className="gc-input" placeholder={t('clone.url')} value={cloneUrl} onChange={(e) => setCloneUrl(e.target.value)} />
+      <div className="gm-section" style={{ marginTop: 14 }}><div className="head"><Icon name="globe" size={12} /> {t('clone.title')}</div></div>
+      <div className="gm-row">
+        <input className="gm-input" placeholder={t('clone.url')} value={cloneUrl} onChange={(e) => setCloneUrl(e.target.value)} />
       </div>
-      <div className="gc-row">
-        <input className="gc-input" placeholder={cloneParent === '' && defaultParent !== '' ? `${t('clone.parent')}: ${defaultParent}` : t('clone.parent')} value={cloneParent} onChange={(e) => setCloneParent(e.target.value)} />
+      <div className="gm-row">
+        <input className="gm-input" placeholder={cloneParent === '' && defaultParent !== '' ? `${t('clone.parent')}: ${defaultParent}` : t('clone.parent')} value={cloneParent} onChange={(e) => setCloneParent(e.target.value)} />
         <button
-          className="gc-btn"
+          className="gm-btn"
           disabled={cloneBusy || cloneUrl.trim() === ''}
           onClick={() => {
             const parent = (cloneParent.trim() || defaultParent).trim()
@@ -1425,7 +1170,7 @@ function GitHubView({ api, path, repoInfo, auth, reloadAuth, onGotoPrs, device, 
           }}
         ><Icon name="plus" size={12} />{t('clone.btn')}</button>
       </div>
-      <div className="gc-muted" style={{ fontSize: 10 }}>{t('clone.hint')}</div>
+      <div className="gm-muted" style={{ fontSize: 10 }}>{t('clone.hint')}</div>
     </div>
   )
 }
@@ -1480,15 +1225,15 @@ function buildLines(text: string, hiLines: number[]): Array<{ n: number; text: s
 function FilePane({ title, cls, lines, missingNote }: { title: string; cls: string; lines: Array<{ n: number; text: string; hi: boolean }> | null; missingNote?: string }): JSX.Element {
   return (
     <>
-      <div className={`gc-pane-head ${cls}`}>{title}</div>
-      <div className="gc-pane">
-        {missingNote != null && <div className="gc-trunc-note">{missingNote}</div>}
-        {lines == null && missingNote == null && <div className="gc-trunc-note">…</div>}
+      <div className={`gm-pane-head ${cls}`}>{title}</div>
+      <div className="gm-pane">
+        {missingNote != null && <div className="gm-trunc-note">{missingNote}</div>}
+        {lines == null && missingNote == null && <div className="gm-trunc-note">…</div>}
         {lines?.map((l) => (
           // eslint-disable-next-line react/no-array-index-key
-          <div key={`${l.n}`} className={`gc-ln${l.hi ? ` ${cls === 'before' ? 'del' : 'add'}` : ''}`}>
-            <span className="gc-lno">{l.n}</span>
-            <span className="gc-ltxt">{l.text === '' ? ' ' : l.text}</span>
+          <div key={`${l.n}`} className={`gm-ln${l.hi ? ` ${cls === 'before' ? 'del' : 'add'}` : ''}`}>
+            <span className="gm-lno">{l.n}</span>
+            <span className="gm-ltxt">{l.text === '' ? ' ' : l.text}</span>
           </div>
         ))}
       </div>
@@ -1506,17 +1251,17 @@ type ComparePayload = {
 }
 
 function FileComparePane({ payload }: { payload: ComparePayload }): JSX.Element {
-  if (!payload || payload.binary) return <div className="gc-trunc-note">{t('agent.binary')}</div>
+  if (!payload || payload.binary) return <div className="gm-trunc-note">{t('agent.binary')}</div>
   const beforeText = payload.before?.text ?? ''
   const afterText = payload.after?.text ?? ''
   const beforeExists = payload.before?.exists === true
   const beforeLines = beforeExists ? buildLines(beforeText, payload.delLines ?? []) : null
   const afterLines = buildLines(afterText, payload.addLines ?? [])
   return (
-    <div className="gc-filediff">
+    <div className="gm-filediff">
       <FilePane title="修改前 · HEAD" cls="before" lines={beforeLines} missingNote={beforeExists ? undefined : t('agent.newFile')} />
       <FilePane title="修改后 · 工作区" cls="after" lines={afterLines} />
-      {payload.truncated && <div className="gc-trunc-note">{t('agent.diffTruncated')}</div>}
+      {payload.truncated && <div className="gm-trunc-note">{t('agent.diffTruncated')}</div>}
     </div>
   )
 }
@@ -1539,16 +1284,16 @@ function DiffHunks({ diff }: { diff: string }): JSX.Element | null {
   }, [diff])
   if (rows.length === 0) return null
   return (
-    <div className="gc-filediff">
-      <div className="gc-pane-head">diff</div>
-      <div className="gc-pane" style={{ gridColumn: '1 / -1' }}>
+    <div className="gm-filediff">
+      <div className="gm-pane-head">diff</div>
+      <div className="gm-pane" style={{ gridColumn: '1 / -1' }}>
         {rows.map((row, i) => row.kind === 'hunk'
-          ? <div key={i} className="gc-trunc-note">{row.text}</div>
+          ? <div key={i} className="gm-trunc-note">{row.text}</div>
           : (
             // eslint-disable-next-line react/no-array-index-key
-            <div key={i} className="gc-ln">
-              <span className="gc-lno" />
-              <span className={`gc-ltxt ${row.l?.cls ?? ''}`}>{row.l?.text ?? ''}{row.r ? `  →  ${row.r.text}` : ''}</span>
+            <div key={i} className="gm-ln">
+              <span className="gm-lno" />
+              <span className={`gm-ltxt ${row.l?.cls ?? ''}`}>{row.l?.text ?? ''}{row.r ? `  →  ${row.r.text}` : ''}</span>
             </div>
           ))}
       </div>
@@ -1556,7 +1301,7 @@ function DiffHunks({ diff }: { diff: string }): JSX.Element | null {
   )
 }
 
-function FileReviewSection({ files, workspace, api }: { files: FileReviewRow[]; workspace: string; api: GitcompassApi }): JSX.Element {
+function FileReviewSection({ files, workspace, api }: { files: FileReviewRow[]; workspace: string; api: GitManagerApi }): JSX.Element {
   const shown = files.slice(0, 20)
   const [activePath, setActivePath] = useState<string | null>(shown[0]?.path ?? null)
   const active = shown.find((f) => f.path === activePath) ?? shown[0]
@@ -1604,32 +1349,32 @@ function FileReviewSection({ files, workspace, api }: { files: FileReviewRow[]; 
     : remote
 
   return (
-    <div className="gc-frev">
-      <div className="gc-ftabs">
+    <div className="gm-frev">
+      <div className="gm-ftabs">
         {shown.map((f) => (
-          <button key={f.path} className={`gc-ftab ${f.path === active?.path ? 'on' : ''}`} onClick={() => setActivePath(f.path)} title={f.path}>
+          <button key={f.path} className={`gm-ftab ${f.path === active?.path ? 'on' : ''}`} onClick={() => setActivePath(f.path)} title={f.path}>
             <span className="p">{f.path}</span>
-            <span className="gc-fstats add">+{f.additions ?? 0}</span>
-            <span className="gc-fstats del">−{f.deletions ?? 0}</span>
+            <span className="gm-fstats add">+{f.additions ?? 0}</span>
+            <span className="gm-fstats del">−{f.deletions ?? 0}</span>
           </button>
         ))}
       </div>
       {active == null ? null
         : active.binary === true
-          ? <div className="gc-trunc-note">{t('agent.binary')}</div>
+          ? <div className="gm-trunc-note">{t('agent.binary')}</div>
           : state.kind === 'loading'
-            ? <div className="gc-trunc-note">…</div>
+            ? <div className="gm-trunc-note">…</div>
             : state.kind === 'error'
               ? (active.diff && active.diff.trim() !== ''
                   ? (
                     <>
-                      <div className="gc-trunc-note">{state.message || t('agent.noFullText')}</div>
+                      <div className="gm-trunc-note">{state.message || t('agent.noFullText')}</div>
                       <DiffHunks diff={active.diff} />
                     </>
                   )
-                  : <div className="gc-err" style={{ padding: 4 }}>{t('agent.fileLoadErr')}: {state.message}</div>)
+                  : <div className="gm-err" style={{ padding: 4 }}>{t('agent.fileLoadErr')}: {state.message}</div>)
               : <FileComparePane payload={state.payload} />}
-      {active.truncated === true && <div className="gc-trunc-note">{t('agent.diffTruncated')}</div>}
+      {active.truncated === true && <div className="gm-trunc-note">{t('agent.diffTruncated')}</div>}
     </div>
   )
 }
@@ -1638,7 +1383,7 @@ function FileReviewSection({ files, workspace, api }: { files: FileReviewRow[]; 
 // Agent view
 // ---------------------------------------------------------------------------
 
-function AgentView({ api, events }: { api: GitcompassApi; events: GitEvent[] }): JSX.Element {
+function AgentView({ api, events }: { api: GitManagerApi; events: GitEvent[] }): JSX.Element {
   const [cleared, setCleared] = useState<boolean>(false)
   const [decided, setDecided] = useState<Record<string, 'approved' | 'rejected'>>({})
   const [preAllowed, setPreAllowed] = useState<string[]>([])
@@ -1677,7 +1422,7 @@ function AgentView({ api, events }: { api: GitcompassApi; events: GitEvent[] }):
     setPreAllowed((prev) => prev.filter((x) => x !== entry))
   }, [api])
 
-  // 对“正在等待”的调用：/gitu/approval 实时解除阻塞；
+  // 对“正在等待”的调用：/gitm/approval 实时解除阻塞；
   // 无 callId 的场景退回预批准（下一次同名调用跳过弹窗）。
   const decide = useCallback((event: GitEvent, decision: 'approved' | 'rejected') => {
     const callId = event.data.callId as string | undefined
@@ -1688,23 +1433,23 @@ function AgentView({ api, events }: { api: GitcompassApi; events: GitEvent[] }):
   }, [api, refreshPre])
 
   return (
-    <div className="gc-agent">
-      <div className="gc-agent-bar">
-        <span className="gc-live"><span className="dot" />{t('agent.live')}</span>
-        <span className="gc-agent-count">{feed.length}</span>
-        {approvalRequests.length > 0 && <span className="gc-chip amber">{approvalRequests.length} {t('agent.pendingApproval')}</span>}
+    <div className="gm-agent">
+      <div className="gm-agent-bar">
+        <span className="gm-live"><span className="dot" />{t('agent.live')}</span>
+        <span className="gm-agent-count">{feed.length}</span>
+        {approvalRequests.length > 0 && <span className="gm-chip amber">{approvalRequests.length} {t('agent.pendingApproval')}</span>}
         {preAllowed.map((entry) => (
-          <span key={entry} className="gc-chip green">
+          <span key={entry} className="gm-chip green">
             {entry} · {t('agent.sessionAllowed')}
-            <button className="gc-chip-x" title={t('agent.clearSessionAllow')} onClick={() => revokePre(entry)}><Icon name="x" size={10} /></button>
+            <button className="gm-chip-x" title={t('agent.clearSessionAllow')} onClick={() => revokePre(entry)}><Icon name="x" size={10} /></button>
           </span>
         ))}
-        <button className="gc-btn" onClick={() => setCleared(!cleared)}>{cleared ? t('agent.restoreFeed') : t('agent.clear')}</button>
-        <button className="gc-btn" title={t('agent.previewCard')} onClick={() => void api.previewFileReview().catch(() => {})}>{t('agent.previewCard')}</button>
+        <button className="gm-btn" onClick={() => setCleared(!cleared)}>{cleared ? t('agent.restoreFeed') : t('agent.clear')}</button>
+        <button className="gm-btn" title={t('agent.previewCard')} onClick={() => void api.previewFileReview().catch(() => {})}>{t('agent.previewCard')}</button>
       </div>
 
       {approvalRequests.length > 0 && (
-        <div className="gc-approvals">
+        <div className="gm-approvals">
           {approvalRequests.map((e) => {
             const key = String(e.data.callId ?? e.data.tool ?? e.id)
             const state = decided[key]
@@ -1712,15 +1457,15 @@ function AgentView({ api, events }: { api: GitcompassApi; events: GitEvent[] }):
             const files = Array.isArray(e.data.files) ? (e.data.files as FileReviewRow[]) : []
             const workspace = String(e.data.workspace ?? '')
             return (
-              <div key={e.id} className={`gc-approve-card${state || sessionAllowed ? ' done' : ''}`}>
-                <div className="gc-approve-msg">{String(e.data.summary ?? e.data.tool ?? '')}</div>
-                <div className="gc-approve-tool">{String(e.data.tool ?? '')}{e.data.callId ? ` · #${String(e.data.callId)}` : ''}</div>
+              <div key={e.id} className={`gm-approve-card${state || sessionAllowed ? ' done' : ''}`}>
+                <div className="gm-approve-msg">{String(e.data.summary ?? e.data.tool ?? '')}</div>
+                <div className="gm-approve-tool">{String(e.data.tool ?? '')}{e.data.callId ? ` · #${String(e.data.callId)}` : ''}</div>
                 {files.length > 0 && <FileReviewSection files={files} workspace={workspace} api={api} />}
-                <div className="gc-approve-actions">
-                  <button className="gc-btn primary" disabled={state !== undefined} onClick={() => decide(e, 'approved')}>{t('agent.approveAll')}</button>
-                  <button className="gc-btn danger" disabled={state !== undefined} onClick={() => decide(e, 'rejected')}>{t('agent.rejectAll')}</button>
+                <div className="gm-approve-actions">
+                  <button className="gm-btn primary" disabled={state !== undefined} onClick={() => decide(e, 'approved')}>{t('agent.approveAll')}</button>
+                  <button className="gm-btn danger" disabled={state !== undefined} onClick={() => decide(e, 'rejected')}>{t('agent.rejectAll')}</button>
                   <button
-                    className="gc-btn"
+                    className="gm-btn"
                     disabled={state !== undefined || sessionAllowed}
                     title={t('agent.allowSession')}
                     onClick={() => {
@@ -1729,7 +1474,7 @@ function AgentView({ api, events }: { api: GitcompassApi; events: GitEvent[] }):
                       refreshPre()
                     }}
                   >{t('agent.allowSession')}</button>
-                  <span className="gc-hint">
+                  <span className="gm-hint">
                     {state === 'approved' ? t('agent.approved')
                       : state === 'rejected' ? t('agent.rejected')
                         : sessionAllowed ? t('agent.allowedSessionHint') : ''}
@@ -1741,16 +1486,16 @@ function AgentView({ api, events }: { api: GitcompassApi; events: GitEvent[] }):
         </div>
       )}
 
-      <div className="gc-feed">
-        {feed.length === 0 && <div className="gc-empty">{t('agent.empty')}</div>}
+      <div className="gm-feed">
+        {feed.length === 0 && <Empty icon="bot" title={t('agent.empty')} />}
         {feed.map((e) => {
           const tag = eventTag(e.type)
           return (
-            <div key={e.id} className={`gc-evt ${tag.cls}`}>
-              <span className="gc-dot" />
-              <span className="gc-tag">{tag.label}</span>
-              <span className="gc-evt-txt">{String(e.data._summary ?? e.data.summary ?? e.type)}</span>
-              <span className="gc-evt-time">{new Date(e.timestamp).toLocaleTimeString()}</span>
+            <div key={e.id} className={`gm-evt ${tag.cls}`}>
+              <span className="gm-dot" />
+              <span className="gm-tag">{tag.label}</span>
+              <span className="gm-evt-txt">{String(e.data._summary ?? e.data.summary ?? e.type)}</span>
+              <span className="gm-evt-time">{new Date(e.timestamp).toLocaleTimeString()}</span>
             </div>
           )
         })}
@@ -1784,18 +1529,18 @@ class PanelErrorBoundary extends Component<{ children: ReactNode }, { error: Err
   render(): ReactNode {
     if (this.state.error === null) return this.props.children
     return (
-      <div className="gitcompass-panel" style={{ padding: 14 }}>
-        <div style={{ color: 'var(--gc-red)', fontWeight: 600, marginBottom: 4 }}>gitcompass 渲染错误 / render error</div>
-        <div style={{ opacity: .75, whiteSpace: 'pre-wrap', fontFamily: 'var(--gc-mono)', fontSize: 11, marginBottom: 10 }}>
+      <div className="gm-panel" style={{ padding: 14 }}>
+        <div style={{ color: 'var(--gm-red)', fontWeight: 600, marginBottom: 4 }}>dsh-git-manager 渲染错误 / render error</div>
+        <div style={{ opacity: .75, whiteSpace: 'pre-wrap', fontFamily: 'var(--gm-mono)', fontSize: 11, marginBottom: 10 }}>
           {String(this.state.error.message || this.state.error)}
         </div>
-        <button className="gc-btn" onClick={() => { this.setState({ error: null }) }}>重置面板 / reset</button>
+        <button className="gm-btn" onClick={() => { this.setState({ error: null }) }}>重置面板 / reset</button>
       </div>
     )
   }
 }
 
-function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { list: { getSnapshot(): { current?: string; byId: Record<string, { cwd?: string }> }; subscribe(fn: () => void): () => void } } }): JSX.Element {
+function CompassPanelInner({ api, sessions }: { api: GitManagerApi; sessions: { list: { getSnapshot(): { current?: string; byId: Record<string, { cwd?: string }> }; subscribe(fn: () => void): () => void } } }): JSX.Element {
   // SSE 订阅常驻顶层：即使切到其他标签页，其他会话的提交/审批事件仍在积累，
   // 回到 Agent 标签即可看到全部历史（不因 unmount 断流）。
   const agentEvents = useGitEvents(200)
@@ -1862,7 +1607,7 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
         const match = cwd ? ws.find((w) => cwd.startsWith(w.path)) : undefined
         setPath(match?.path ?? ws[0].path)
       }
-    }).catch((e) => console.error('gitcompass: workspaces', e))
+    }).catch((e) => console.error('dsh-git-manager: workspaces', e))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1897,9 +1642,9 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
   }, [path, tick])
 
   useEffect(() => {
-    if (!document.querySelector('style[data-plugin="gitcompass-css"]')) {
+    if (!document.querySelector('style[data-plugin="dsh-git-manager-css"]')) {
       const style = document.createElement('style')
-      style.dataset.plugin = 'gitcompass-css'
+      style.dataset.plugin = 'dsh-git-manager-css'
       style.textContent = css
       document.head.appendChild(style)
     }
@@ -1917,20 +1662,20 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
   const TAB_ICONS: Record<TabId, IconName> = { branches: 'git-branch', changes: 'diff', graph: 'commit', prs: 'git-pr', issues: 'issue', github: 'globe', agent: 'bot' }
 
   return (
-    <div className="gitcompass-panel">
-      <div className="gc-head">
-        <div className="gc-repo">
-          <select value={path} onChange={(e) => { setPath(e.target.value); setTick((x) => x + 1) }}>
+    <div className="gm-panel">
+      <div className="gm-head">
+        <div className="gm-repo">
+          <select value={path} title={path} onChange={(e) => { setPath(e.target.value); setTick((x) => x + 1) }}>
             {workspaces.length === 0 ? <option value="">{t('repo.none')}</option> : null}
             {workspaces.map((w) => <option key={w.path} value={w.path}>{w.title || w.path.split(/[\\/]/).pop()}</option>)}
           </select>
-          <button className="gc-btn" onClick={() => { setAddOpen(!addOpen); setAddValue('') }} title={t('repo.add')}><Icon name="plus" size={12} />{t('repo.add')}</button>
-          <button className="gc-btn sm" onClick={removeCurrentRepo} title={t('repo.removeCurrent')}><Icon name="trash" size={13} /></button>
-          <button className="gc-btn" onClick={() => setTick((x) => x + 1)} title={t('common.refresh')}><Icon name="sync" size={12} />{t('common.refresh')}</button>
-          <button className="gc-btn sm" onClick={() => setSettingsOpen(!settingsOpen)} title={t('settings.title')}><Icon name="gear" size={13} /></button>
+          <button className="gm-btn" onClick={() => { setAddOpen(!addOpen); setAddValue('') }} title={t('repo.add')}><Icon name="plus" size={12} />{t('repo.add')}</button>
+          <button className="gm-btn sm" onClick={removeCurrentRepo} title={t('repo.removeCurrent')}><Icon name="trash" size={13} /></button>
+          <button className="gm-btn" onClick={() => setTick((x) => x + 1)} title={t('common.refresh')}><Icon name="sync" size={12} />{t('common.refresh')}</button>
+          <button className="gm-btn sm" onClick={() => setSettingsOpen(!settingsOpen)} title={t('settings.title')}><Icon name="gear" size={13} /></button>
         </div>
         {addOpen ? (
-          <div className="gc-addrow">
+          <div className="gm-addrow">
             <input
               autoFocus
               value={addValue}
@@ -1938,49 +1683,57 @@ function CompassPanelInner({ api, sessions }: { api: GitcompassApi; sessions: { 
               onChange={(e) => setAddValue(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') submitAddRepo(); else if (e.key === 'Escape') { setAddOpen(false); setAddValue('') } }}
             />
-            <button className="gc-btn" onClick={submitAddRepo}>{t('actions.confirm')}</button>
-            <button className="gc-btn sm" onClick={() => { setAddOpen(false); setAddValue('') }}>{t('actions.cancel')}</button>
+            <button className="gm-btn" onClick={submitAddRepo}>{t('actions.confirm')}</button>
+            <button className="gm-btn sm" onClick={() => { setAddOpen(false); setAddValue('') }}>{t('actions.cancel')}</button>
           </div>
         ) : null}
           {settingsOpen ? (
-            <div className="gc-settings">
-              <div className="gc-settings-row">
-                <span className="gc-muted">{t('settings.language')}</span>
+            <div className="gm-settings">
+              <div className="gm-settings-row">
+                <span className="gm-muted">{t('settings.language')}</span>
                 {([null, 'zh', 'en'] as const).map((loc) => (
                   <button
                     key={loc ?? 'auto'}
-                    className={`gc-btn${getLocaleOverride() === loc ? ' primary' : ''}`}
+                    className={`gm-btn${getLocaleOverride() === loc ? ' primary' : ''}`}
                     onClick={() => { setLocaleOverride(loc); forceRender((x) => x + 1) }}
                   >{loc === null ? t('settings.langAuto') : loc === 'zh' ? t('settings.langZh') : t('settings.langEn')}</button>
                 ))}
               </div>
-              <div className="gc-settings-row">
-                <span className="gc-muted">{t('settings.poll')}</span>
+              <div className="gm-settings-row">
+                <span className="gm-muted">{t('settings.poll')}</span>
                 {(['fast', 'std', 'slow'] as const).map((spd) => (
                   <button
                     key={spd}
-                    className={`gc-btn${pollSpeed === spd ? ' primary' : ''}`}
+                    className={`gm-btn${pollSpeed === spd ? ' primary' : ''}`}
                     onClick={() => { setPollSpeed(spd); forceRender((x) => x + 1) }}
                   >{spd === 'fast' ? t('settings.pollFast') : spd === 'std' ? t('settings.pollStd') : t('settings.pollSlow')}</button>
                 ))}
               </div>
-              <div className="gc-muted" style={{ fontSize: 9, opacity: 0.6 }}>gitcompass v{GC_VERSION}</div>
+              <div className="gm-muted" style={{ fontSize: 9, opacity: 0.6 }}>dsh-git-manager v{GM_VERSION}</div>
             </div>
           ) : null}
       </div>
       <FlowStrip flow={flow} />
-      <div className="gc-tabs">
+      <div className="gm-tabs" role="tablist">
         {tabs.map(([id, key]) => (
-          <div key={id} className={`gc-tab ${tab === id ? 'on' : ''}`} onClick={() => setTab(id)}>
-            <Icon className="gc-ic" name={TAB_ICONS[id]} size={13} />
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            title={t(key)}
+            className={`gm-tab${tab === id ? ' on' : ''}`}
+            onClick={() => setTab(id)}
+          >
+            <Icon className="gm-ic" name={TAB_ICONS[id]} size={13} />
             {t(key)}
-            {id === 'agent' && pendingApprovals > 0 ? <span className="gc-badge">{pendingApprovals}</span> : null}
-          </div>
+            {id === 'agent' && pendingApprovals > 0 ? <span className="gm-badge">{pendingApprovals}</span> : null}
+          </button>
         ))}
       </div>
       <OpBanner />
-      <div className="gc-body">
-        {!path ? <div className="gc-empty">{t('repo.none')}</div> : (
+      <div className="gm-body">
+        {!path ? <Empty icon="folder" title={t('repo.none')} /> : (
           <>
             <ConflictStrip api={api} path={path} />
             {tab === 'branches' && <Branches api={api} path={path} />}

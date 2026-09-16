@@ -1,5 +1,5 @@
 /**
- * gitcompass — shared host types.
+ * dsh-git-manager — shared host types.
  */
 
 /** A git op that can fail with a structured error. */

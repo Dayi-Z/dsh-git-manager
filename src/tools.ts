@@ -1,5 +1,5 @@
 /**
- * gitcompass — model-side tools: structured git / GitHub operations so the
+ * dsh-git-manager — model-side tools: structured git / GitHub operations so the
  * agent stops reaching for ad-hoc `git` shell commands. Every write tool
  * (commit / push / PR create+merge / issue create) goes through the DSH
  * approval channel; read-only tools do not.
@@ -7,7 +7,7 @@
  * The user's rule: any operation that modifies files must prompt first —
  * `git_commit` and `git_push` therefore always request approval, and their
  * descriptions say so explicitly.
- * @module gitcompass/tools
+ * @module dsh-git-manager/tools
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -118,7 +118,7 @@ async function requireApproval(ctx: Context, exec: ToolExec, reason: string, eve
       eventBus.emit('approval:rejected', { tool: exec.name, callId, summary: reason, source: 'no-panel' })
     }
     throw new Error(
-      `approval for "${exec.name}" cannot be decided: no gitcompass panel is connected `
+      `approval for "${exec.name}" cannot be decided: no dsh-git-manager panel is connected `
       + `and the native approval channel returned "${first.outcome ?? 'unavailable'}" (under approval policy 'never' this is an automatic ghost deny). `
       + `The panel approval card is the deciding gate: ask the user to open the Git panel and retry `
       + `— or pre-approve this tool from the panel for the rest of the session.`,
@@ -247,7 +247,7 @@ export function registerTools(ctx: Context, service: GitService, eventBus?: Even
     }, eventBus),
     looseTool({
       name: 'git_commit',
-      description: 'COMMIT staged changes in a git workspace (git commit -m). THIS MODIFIES FILES — always gated by the gitcompass panel approval card, which works under any approval policy (including prompts-disabled "never": the native auto-rejection cannot veto, the panel card decides). Without an open Git panel it fails fast — tell the user to open the Git panel, then retry.',
+      description: 'COMMIT staged changes in a git workspace (git commit -m). THIS MODIFIES FILES — always gated by the dsh-git-manager panel approval card, which works under any approval policy (including prompts-disabled "never": the native auto-rejection cannot veto, the panel card decides). Without an open Git panel it fails fast — tell the user to open the Git panel, then retry.',
       parameters: {
         workspace: prop('string', true, 'Absolute path of the git workspace.'),
         message: prop('string', true, 'Commit message.'),

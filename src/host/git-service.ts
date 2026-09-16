@@ -1,8 +1,8 @@
 /**
- * gitcompass — host git service: workspace-bounded git operations through the
+ * dsh-git-manager — host git service: workspace-bounded git operations through the
  * managed subprocess seam. Adapted from dsh-git-panel's proven implementation,
  * extended with upstream-aware push (`git push -u`) and branch creation.
- * @module gitcompass/host/git-service
+ * @module dsh-git-manager/host/git-service
  */
 
 import { realpath, readFile, writeFile } from 'node:fs/promises'

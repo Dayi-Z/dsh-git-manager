@@ -1,13 +1,13 @@
 /**
- * gitcompass — plugin-owned repository shelf.
+ * dsh-git-manager — plugin-owned repository shelf.
  *
  * DSH's workspaceRegistry only contains folders users explicitly registered;
- * nested standalone repos (e.g. gitcompass inside the dshmarket monorepo) are
+ * nested standalone repos (e.g. dsh-git-manager inside the dshmarket monorepo) are
  * invisible to it. This store persists an extra, user-managed repo list so
  * they appear in the panel dropdown and pass the git operations gate.
  *
- * Storage: ~/.dsh/storages/gitcompass/repos.json
- * @module gitcompass/host/repo-store
+ * Storage: ~/.dsh/storages/dsh-git-manager/repos.json
+ * @module dsh-git-manager/host/repo-store
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -19,7 +19,7 @@ export interface RepoShelfEntry {
   title?: string
 }
 
-const STORAGE_DIR = join(homedir(), '.dsh', 'storages', 'gitcompass')
+const STORAGE_DIR = join(homedir(), '.dsh', 'storages', 'dsh-git-manager')
 const SHELF_FILE = join(STORAGE_DIR, 'repos.json')
 
 let cache: RepoShelfEntry[] | null = null

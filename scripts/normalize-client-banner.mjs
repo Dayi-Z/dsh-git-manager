@@ -6,7 +6,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = join(__dirname, '..')
 const clientDir = join(root, 'client')
 
-const pluginId = 'gitcompass'
+const pluginId = 'dsh-git-manager'
 const inputFile = join(clientDir, 'index.cjs')
 const outputFile = join(clientDir, 'client.js')
 const mapInput = join(clientDir, 'index.cjs.map')

@@ -1,15 +1,15 @@
 /**
- * gitcompass — browser entry: mounts the compass panel as a right-side frame
+ * dsh-git-manager — browser entry: mounts the compass panel as a right-side frame
  * column (same technique as dsh-git-panel: find the shell frame grid, append a
  * track). All wiring failures log instead of throwing — a throw would abort
  * the whole boot.
- * @module gitcompass/client
+ * @module dsh-git-manager/client
  */
 
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { Component, createElement, type ErrorInfo, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { GitcompassApi } from './api.ts'
+import { GitManagerApi } from './api.ts'
 import { initI18n } from './i18n.ts'
 import { CompassPanel } from './Panel.tsx'
 
@@ -20,10 +20,10 @@ class Boundary extends Component<{ children: ReactNode }, { error: string | null
     return { error: String(error instanceof Error ? error.message : error) }
   }
   componentDidCatch(error: unknown, info: ErrorInfo): void {
-    try { document.body.dataset.gitcompassErr = String(error) + ' | ' + info.componentStack } catch { /* noop */ }
+    try { document.body.dataset.gitmErr = String(error) + ' | ' + info.componentStack } catch { /* noop */ }
   }
   render(): ReactNode {
-    if (this.state.error) return createElement('div', { className: 'gitcompass-panel gc-err' }, `gitcompass render error: ${this.state.error}`)
+    if (this.state.error) return createElement('div', { className: 'gm-panel gm-err' }, `dsh-git-manager render error: ${this.state.error}`)
     return this.props.children
   }
 }
@@ -54,12 +54,18 @@ let frameEl: HTMLElement | null = null
 // ---------------------------------------------------------------------------
 // 自愈：shell 文档无缓存头 → 浏览器启发式缓存可能让页面停留在旧 rev 的
 // client.js 上（Ctrl+F5 对注入式模块无效）。定期以 no-store 取最新 shell，
-// 比对 gitcompass client.js 的 rev；不一致 → 整页重载一次。
+// 比对 dsh-git-manager client.js 的 rev；不一致 → 整页重载一次。
 // sessionStorage 记录"已为该 rev 重载过"，防止循环。
 // ---------------------------------------------------------------------------
 
+/** dsh-client-modules 把插件的浏览器半打包成一个合并 URL：
+ *  `/plugins/??<id>/client.js[,<id2>/client.js]&rev=<sha1-12>`。因此 rev 不在
+ *  `client.js` 之后直接出现——它跟在整个 id 列表后面。匹配时必须允许中间隔
+ *  着其它插件的条目，否则这个自愈永远拿不到 rev（历史实现就是这样静默失效的）。 */
+const REV_RE = /\/plugins\/\?\?[^"']*dsh-git-manager\/client\.js[^"']*[?&]rev=([a-f0-9]+)/
+
 function currentRev(): string {
-  const m = document.documentElement.innerHTML.match(/plugins\/gitcompass\/client\.js\?rev=([a-f0-9]+)/)
+  const m = document.documentElement.innerHTML.match(REV_RE)
   return m?.[1] ?? ''
 }
 
@@ -69,13 +75,13 @@ function selfHeal(): void {
   void fetch('/', { cache: 'no-store' })
     .then((r) => r.text())
     .then((html) => {
-      const latest = html.match(/plugins\/gitcompass\/client\.js\?rev=([a-f0-9]+)/)?.[1] ?? ''
+      const latest = html.match(REV_RE)?.[1] ?? ''
       if (latest === '' || latest === mine) return
       let reloadedFor = ''
-      try { reloadedFor = sessionStorage.getItem('gc.selfheal-rev') ?? '' } catch { /* noop */ }
+      try { reloadedFor = sessionStorage.getItem('gm.selfheal-rev') ?? '' } catch { /* noop */ }
       if (reloadedFor === latest) return
-      try { sessionStorage.setItem('gc.selfheal-rev', latest) } catch { /* noop */ }
-      console.info(`gitcompass: client rev ${mine} → ${latest}, reloading`)
+      try { sessionStorage.setItem('gm.selfheal-rev', latest) } catch { /* noop */ }
+      console.info(`dsh-git-manager: client rev ${mine} → ${latest}, reloading`)
       setTimeout(() => location.reload(), 800)
     })
     .catch(() => { /* 网络抖动：下个周期再试 */ })
@@ -85,7 +91,7 @@ setTimeout(selfHeal, 4_000)
 
 function loadPanelWidth(): number {
   try {
-    const stored = Number(localStorage.getItem('gc.panelWidth'))
+    const stored = Number(localStorage.getItem('gm.panelWidth'))
     if (Number.isFinite(stored) && stored >= PANEL_MIN_WIDTH && stored <= PANEL_MAX_WIDTH) return Math.round(stored)
   } catch { /* storage may be unavailable */ }
   return PANEL_DEFAULT_WIDTH
@@ -178,7 +184,7 @@ function dockIn(frame: HTMLElement): { dock: HTMLElement; sync: () => void } {
   }
   const dock = document.createElement('div')
   dock.dataset.dshDock = ''
-  dock.style.cssText = 'position:relative;height:100%;min-width:0;display:flex;flex-direction:column;overflow:hidden;border-left:1px solid rgba(128,128,128,.28);background:transparent;'
+  dock.style.cssText = 'position:relative;height:100%;min-width:0;display:flex;flex-direction:column;overflow:hidden;border-left:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.28));background:transparent;'
   frame.appendChild(dock)
   const grip = document.createElement('div')
   grip.dataset.dshDockGrip = ''
@@ -212,7 +218,7 @@ function dockCard(dock: HTMLElement): HTMLElement {
   card.dataset.dshCard = ''
   const hasCards = dock.querySelectorAll<HTMLElement>('[data-dsh-card]').length > 0
   card.style.cssText = hasCards
-    ? 'flex:1 1 0;min-height:0;display:flex;flex-direction:column;overflow:auto;border-top:1px solid rgba(128,128,128,.28);'
+    ? 'flex:1 1 0;min-height:0;display:flex;flex-direction:column;overflow:auto;border-top:1px solid var(--dsw-alias-border-l1,rgba(128,128,128,.28));'
     : 'flex:1 1 0;min-height:0;display:flex;flex-direction:column;overflow:auto;'
   dock.appendChild(card)
   return card
@@ -222,7 +228,7 @@ export function apply(ctx: PanelClientContext): void {
   try {
     initI18n(ctx.locale)
   } catch (error) {
-    console.error('gitcompass: i18n init failed', error)
+    console.error('dsh-git-manager: i18n init failed', error)
   }
 
   ctx.effect(() => {
@@ -233,16 +239,16 @@ export function apply(ctx: PanelClientContext): void {
       // 加入共享右栏 Dock（无则创建），作为一张等高卡片一上一下堆叠。
       const { dock, sync } = dockIn(frame)
       const card = dockCard(dock)
-      card.dataset.gitcompassCol = ''
+      card.dataset.gitmCol = ''
 
-      const api = new GitcompassApi()
+      const api = new GitManagerApi()
       const host = ctx as unknown as { sessions: PanelClientContext['sessions'] }
       try {
         root = createRoot(card)
         root.render(createElement(Boundary, null, createElement(CompassPanel, { api, sessions: host.sessions })))
       } catch (error) {
-        try { document.body.dataset.gitcompassErr = String(error instanceof Error ? error.message : error) } catch { /* noop */ }
-        console.error('gitcompass: mount failed', error)
+        try { document.body.dataset.gitmErr = String(error instanceof Error ? error.message : error) } catch { /* noop */ }
+        console.error('dsh-git-manager: mount failed', error)
       }
 
       // 外壳重排 / 其他面板增删 → 保证 Dock 轨道存在且宽度正确（幂等）。
@@ -269,5 +275,5 @@ export function apply(ctx: PanelClientContext): void {
 
     disposers.push(waitForFrame(mount))
     return () => { for (const d of disposers) d() }
-  }, 'gitcompass: panel column')
+  }, 'dsh-git-manager: panel column')
 }
