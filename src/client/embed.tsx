@@ -59,6 +59,8 @@ export interface SidebarTabDescriptor {
 /** The slice of the better-sidebar client service this plugin uses. */
 export interface BetterSidebarLike {
   registerTab(descriptor: SidebarTabDescriptor): () => void
+  /** Registry read-back, used to verify the registration actually landed. */
+  getTab?(id: string): SidebarTabDescriptor | undefined
   readonly version?: string
 }
 
@@ -94,7 +96,13 @@ function TabBody({ api, sessions, scope, visible }: EmbedDeps & SidebarTabProps)
   return <CompassPanel api={api} sessions={sessions} cwd={scope?.cwd} />
 }
 
-/** 把面板注册成 better-sidebar 的一个页签，返回注销函数。 */
+/**
+ * 把面板注册成 better-sidebar 的一个页签，返回注销函数。
+ *
+ * 注册成功后**回读一次注册表**（`getTab`）：调用了 `registerTab` 不等于页签
+ * 真的进了列表（宿主版本差异、服务半路失效……），而"面板静默消失"是最糟的
+ * 结局。回读不到就抛错，让调用方退回落地的独立卡片——宁可有面板，不可没面板。
+ */
 export function registerSidebarTab(service: BetterSidebarLike, deps: EmbedDeps): () => void {
   // 常驻一条订阅：页签角标要在面板没挂载时也有数，而 SSE 连接是引用计数的
   // 共享连接（events.ts），所以这里只是不让它掉到 0。
@@ -113,5 +121,13 @@ export function registerSidebarTab(service: BetterSidebarLike, deps: EmbedDeps):
     },
     component: (props: SidebarTabProps) => createElement(TabBody, { ...deps, ...props }),
   })
+
+  // 回读校验：老版本没有 getTab 就跳过（不阻塞集成）。
+  if (typeof service.getTab === 'function' && service.getTab(TAB_ID) === undefined) {
+    dispose()
+    keepAlive()
+    throw new Error(`better-sidebar accepted registerTab('${TAB_ID}') but does not list it`)
+  }
+
   return () => { dispose(); keepAlive() }
 }
