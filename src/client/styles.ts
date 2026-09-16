@@ -42,8 +42,12 @@ export const css = `
   --gm-border:var(--dsw-alias-border-l2,rgba(0,0,0,.14));
   --gm-scroll:var(--dsw-alias-scrollbar-bg-l2,rgba(0,0,0,.2));
   --gm-scroll-hover:var(--dsw-alias-scrollbar-hover-l2,rgba(0,0,0,.35));
-  --gm-accent:var(--dsw-alias-brand-primary,#1a7f37);
-  --gm-accent-soft:var(--dsw-alias-accent-soft,color-mix(in srgb,var(--dsw-alias-brand-primary,#1a7f37) 12%,transparent));
+  /* 注意：--dsw-alias-brand-primary 在 DSH 的暗色主题里是 #f9fafb（白），
+     不是"强调色"——旧映射让 .gm-step.active 变成白字白底（"分支绿色、其它白色"
+     那个 bug 的根因）。Dark 主题里真正能当强调色用的是业务蓝（进行中），
+     与成功的绿（已完成）天然区分：三个状态各自可读。 */
+  --gm-accent:var(--dsw-alias-state-business-primary,#0969da);
+  --gm-accent-soft:var(--dsw-alias-accent-soft,color-mix(in srgb,var(--dsw-alias-state-business-primary,#0969da) 16%,transparent));
   --gm-primary-fill:var(--dsw-alias-button-primary-fill,#1a7f37);
   --gm-primary-hover:var(--dsw-alias-button-primary-hover,#15702f);
   --gm-green:var(--dsw-alias-state-success-primary,#1a7f37);
@@ -65,7 +69,7 @@ export const css = `
   --gm-lane-5:color-mix(in oklab,var(--dsw-alias-state-business-primary,#0969da) 55%,var(--dsw-alias-state-error-primary,#cf222e));
   --gm-lane-6:color-mix(in oklab,var(--dsw-alias-state-success-primary,#1a7f37) 45%,var(--dsw-alias-state-business-primary,#0969da));
   --gm-lane-7:color-mix(in oklab,var(--dsw-alias-state-warn-primary,#9a6700) 60%,var(--dsw-alias-state-error-primary,#cf222e));
-  --gm-lane-8:color-mix(in oklab,var(--dsw-alias-state-error-primary,#cf222e) 45%,var(--dsw-alias-brand-primary,#1a7f37));
+  --gm-lane-8:color-mix(in oklab,var(--dsw-alias-state-error-primary,#cf222e) 45%,var(--dsw-alias-state-business-primary,#0969da));
   --gm-shadow:var(--dsw-shadow-lv2,0 8px 24px rgba(0,0,0,.18));
   --gm-t:var(--ds-transition-duration-slow,150ms);
   --gm-ease:var(--ds-ease-in-out,ease);
@@ -209,7 +213,7 @@ export const css = `
 .gm-bhead{position:relative;display:flex;align-items:center;gap:8px}
 .gm-bswitch{min-width:0}
 .gm-bpill{display:inline-flex;align-items:center;gap:7px;max-width:220px;padding:5px 11px;border:1px solid var(--gm-border);border-radius:7px;background:transparent;color:var(--gm-fg);font:var(--dsw-font-xxs-strong-12);font-family:var(--gm-mono);cursor:pointer;transition:border-color var(--gm-t) var(--gm-ease),background var(--gm-t) var(--gm-ease)}
-.gm-bpill:hover{border-color:var(--gm-ring);background:var(--gm-hover)}
+.gm-bpill:hover{border-color:var(--gm-accent);background:var(--gm-hover)}
 .gm-bpill .dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--gm-accent);box-shadow:0 0 0 3px var(--gm-accent-soft)}
 .gm-bpill .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gm-bpill .cv{color:var(--gm-fg-3);font-size:9px}

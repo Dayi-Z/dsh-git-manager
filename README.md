@@ -71,7 +71,9 @@ The plugin never claims a surface the host already owns:
 - **`dsh-better-sidebar` present** — the panel registers a sidebar tab (`dsh-git-manager:panel`, titled "Git Manager" / "Git 管理", idempotent) and does **not** mount its own column. You open it from the sidebar's new-tab list; it then persists with the session. The tab carries a live badge with the number of write operations waiting for your approval.
 - **`dsh-better-sidebar` absent** — the panel keeps its own right-column card, with a collapse handle in its header. Collapsing leaves just that header strip and **stops all polling** (nothing hits git in the background); the state persists.
 
-The detection is a runtime probe (`ctx.get('betterSidebar')`), so better-sidebar stays an *optional* peer: no hard dependency, no build-time import of its types, and a failed registration degrades to the standalone card instead of losing the panel.
+The detection is a runtime probe (`ctx.get('betterSidebar')`), so better-sidebar stays an *optional* peer: no hard dependency, no build-time import of its types, and a failed registration degrades to the standalone card instead of losing the panel. It can be overruled with `localStorage['gm.host'] = 'dock' | 'tab'` (default: auto).
+
+The panel also **follows the session's workspace**: it resolves the cwd of the session it belongs to (the tab's `scope.cwd`, else the session id, else the active session), matches it against the known workspaces on a path boundary, and re-selects the repository whenever that session moves — while never overriding a repository you picked by hand.
 
 ## Development
 

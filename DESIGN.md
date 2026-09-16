@@ -56,6 +56,8 @@
 
 推论（设计纪律）：**探测必须是软的**——`ctx.get('betterSidebar')` 返回 null 是正常路径；注册抛错要降级成独立卡片而不是丢面板；better-sidebar 的类型只以结构化子集声明，不进构建依赖。
 
+还有一个推论：**强调色不是品牌色**。DSH 暗色主题里 --dsw-alias-brand-primary = #f9fafb（白），而 --dsw-alias-accent-soft 根本不存在——把它当强调色，.gm-step.active 就是白字叠白底（"分支绿色、其它白色"那个 bug）。可用的是状态令牌：进行中用 business 蓝（#679efe）、已完成用 success 绿（#22c55e）、待办用 label-tertiary 灰，三态各自可读。**别猜主题，去页面里把令牌值读出来。**
+
 另一个推论：**隐藏 ≠ 继续跑**。面板被收起或被切走时，宿主调 `setPanelActive(false)`，`usePoll` 停发请求；重新可见时广播 `gm:active`，所有轮询立刻补一次而不是干等一个周期。
 
 ## 样式落点

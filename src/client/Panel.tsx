@@ -1574,18 +1574,78 @@ export interface CompassPanelProps {
   /** 宿主所在会话的 cwd（better-sidebar 页签由 `scope.cwd` 给出）。
    *  有它时按它选仓库，比"去猜当前活跃会话"准确。 */
   cwd?: string
+  /** 宿主所在会话的 id（better-sidebar 页签的 `scope.sessionId`）。
+   *  没有 cwd 时用它去 sessions store 里查，仍然是"本页签自己的会话"。 */
+  sessionId?: string
   /** 收起态：只有独立 Dock 形态会传（页签的生命周期归 better-sidebar）。
    *  收起时靠 CSS 只留头部，宿主负责停轮询。 */
   collapsed?: boolean
   onToggleCollapsed?: () => void
 }
 
-function CompassPanelInner({ api, sessions, cwd, collapsed = false, onToggleCollapsed }: CompassPanelProps): JSX.Element {
+/** 把工作区路径与 cwd 都归一化后比较：Windows 上大小写与反斜杠都不该影响命中。 */
+function normPath(p: string): string {
+  return p.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
+}
+
+/** 从会话 cwd 里挑出最具体的那个工作区。
+ *  必须比对**路径边界**：否则 `D:/a/b` 会被 `D:/a/b2` 命中（旧实现就有这个 bug）。
+ *  取最长命中，嵌套仓库/子目录工作区才不会被父目录抢走。 */
+function matchWorkspace(workspaces: WorkspaceEntry[], cwd: string): WorkspaceEntry | undefined {
+  const target = normPath(cwd)
+  let best: WorkspaceEntry | undefined
+  for (const w of workspaces) {
+    const base = normPath(w.path)
+    if (base === '' || target !== base && !target.startsWith(base + '/')) continue
+    if (best === undefined || base.length > normPath(best.path).length) best = w
+  }
+  return best
+}
+
+/**
+ * 本面板所属会话的 cwd —— "自动检测当前会话工作区"的唯一来源。
+ * 优先级：宿主直接给的 `cwd`（better-sidebar 的 scope.cwd）→ 宿主给的
+ * `sessionId` 查 sessions store → 全局"当前活跃会话"（独立 Dock 形态没有
+ * sessionId，只能这样）。
+ *
+ * 订阅 store 而不是读一次快照：换工作区、切会话、页面重开都会自己跟上，
+ * 面板不需要用户手动去下拉框里挑。
+ */
+function useOwnCwd(sessions: CompassPanelProps['sessions'], sessionId: string | undefined, cwd: string | undefined): string | undefined {
+  const resolve = useCallback((): string | undefined => {
+    if (cwd !== undefined && cwd !== '') return cwd
+    const snapshot = sessions.list.getSnapshot()
+    if (sessionId !== undefined) {
+      const own = snapshot.byId[sessionId]?.cwd
+      if (own !== undefined && own !== '') return own
+    }
+    const current = snapshot.current
+    return current ? snapshot.byId[current]?.cwd : undefined
+  }, [sessions, sessionId, cwd])
+
+  // 存字符串而不是 store 快照：不依赖 getSnapshot 的引用稳定性
+  // （useSyncExternalStore 要求它缓存，而那是宿主 store 的实现细节，
+  //  拿它当契约会在宿主换实现时变成无限渲染）。字符串相等时 React 自己
+  // 就不再重渲染。
+  const [own, setOwn] = useState<string | undefined>(resolve)
+  useEffect(() => {
+    const read = (): void => setOwn(resolve())
+    read()
+    return sessions.list.subscribe(read)
+  }, [resolve, sessions])
+  return own
+}
+
+function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, onToggleCollapsed }: CompassPanelProps): JSX.Element {
   // SSE 订阅常驻顶层：即使切到其他标签页，其他会话的提交/审批事件仍在积累，
   // 回到 Agent 标签即可看到全部历史（不因 unmount 断流）。
   const agentEvents = useGitEvents(200)
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([])
   const [path, setPath] = useState<string>('')
+  // "本面板属于哪个会话的工作区"——换会话/换工作区会自动跟上（见 useOwnCwd）。
+  const ownCwd = useOwnCwd(sessions, sessionId, cwd)
+  /** 上一次自动选中的会话 cwd：用来区分"会话变了"和"用户自己选了别的"。 */
+  const appliedCwd = useRef<string | undefined>(undefined)
   const [tab, setTab] = useState<TabId>('changes')
   const [flow, setFlow] = useState<FlowSnapshot | null>(null)
   const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null)
@@ -1639,21 +1699,26 @@ function CompassPanelInner({ api, sessions, cwd, collapsed = false, onToggleColl
   }, [authState?.connected])
 
   useEffect(() => {
-    void api.workspaces().then((ws) => {
-      setWorkspaces(ws)
-      if (ws.length > 0 && !path) {
-        // 宿主给的 cwd 优先（better-sidebar 页签的 scope.cwd 就是本标签页所属
-        // 会话），否则退回"当前活跃会话"——多会话下前者才是对的。
-        const own = cwd ?? (() => {
-          const current = sessions.list.getSnapshot().current
-          return current ? sessions.list.getSnapshot().byId[current]?.cwd : undefined
-        })()
-        const match = own ? ws.find((w) => own.startsWith(w.path)) : undefined
-        setPath(match?.path ?? ws[0].path)
-      }
-    }).catch((e) => console.error('dsh-git-manager: workspaces', e))
+    void api.workspaces().then(setWorkspaces).catch((e) => console.error('dsh-git-manager: workspaces', e))
+  }, [api])
+
+  /**
+   * 自动检测当前会话的工作区：会话 cwd 一变（换工作区 / 切会话 / 重开会话），
+   * 面板就切到对应的仓库。
+   *
+   * 关键在于**记住"上次自动切到哪个 cwd"**，而不是每次依赖变化都重算：
+   * 否则用户手动选了别的仓库、或刚收录一个仓库（workspaces 变了），都会被
+   * 硬拽回会话仓库。规则是——自动检测跟随会话，但绝不对抗手动选择。
+   */
+  useEffect(() => {
+    if (ownCwd === undefined || ownCwd === '' || workspaces.length === 0) return
+    if (appliedCwd.current === ownCwd && path !== '') return
+    const match = matchWorkspace(workspaces, ownCwd)
+    if (match === undefined) return
+    appliedCwd.current = ownCwd
+    if (match.path !== path) setPath(match.path)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [ownCwd, workspaces, path])
 
   /** 手动收录本地仓库（嵌套仓库/未注册目录），返回值即最新合并清单。
    *  注意：Electron 不支持 window.prompt（同步抛 "prompt() is and will not

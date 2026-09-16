@@ -54,6 +54,15 @@ const PANEL_MAX_WIDTH = 460
 
 let frameEl: HTMLElement | null = null
 
+/** 宿主形态的手动覆盖：'dock' 强制独立卡片，'tab' 强制页签，其它值等于自动。 */
+function hostPreference(): 'auto' | 'dock' | 'tab' {
+  try {
+    const value = localStorage.getItem('gm.host')
+    if (value === 'dock' || value === 'tab') return value
+  } catch { /* storage unavailable */ }
+  return 'auto'
+}
+
 // ---------------------------------------------------------------------------
 // 自愈：shell 文档无缓存头 → 浏览器启发式缓存可能让页面停留在旧 rev 的
 // client.js 上（Ctrl+F5 对注入式模块无效）。定期以 no-store 取最新 shell，
@@ -357,8 +366,11 @@ export function apply(ctx: PanelClientContext): void {
     // 页签已经生效，旧的那条右栏还占着位置。
     purgeStaleStandalone()
 
-    const probed = betterSidebarOf(ctx)
-    console.info(`dsh-git-manager: better-sidebar probe → ${probed === null ? 'absent' : 'present'}; ctx.get is ${typeof (ctx as { get?: unknown }).get}`)
+    // 自动探测之外留一个手动开关：`localStorage['gm.host'] = 'dock' | 'tab'`。
+    // 启发式总有判错的场合（用户就想自己撑一块面板，或想复现某一种形态）。
+    const preference = hostPreference()
+    const probed = preference === 'dock' ? null : betterSidebarOf(ctx)
+    console.info(`dsh-git-manager: better-sidebar probe → ${probed === null ? 'absent' : 'present'}; ctx.get is ${typeof (ctx as { get?: unknown }).get}; preference ${preference}`)
 
     if (!adoptSidebar(probed)) {
       markHost('dock')
@@ -366,6 +378,7 @@ export function apply(ctx: PanelClientContext): void {
       disposers.push(() => cancelStandalone?.())
       // better-sidebar 可能比本插件晚挂载：它一出现就换成页签形态并撤掉 Dock。
       try {
+        if (preference === 'dock') throw new Error('host pinned to dock by localStorage')
         ctx.inject(['betterSidebar'], (scope) => {
           if (!adoptSidebar(betterSidebarOf(scope))) return
           markHost('tab-late')

@@ -93,7 +93,7 @@ function TabBody({ api, sessions, scope, visible }: EmbedDeps & SidebarTabProps)
     setPanelActive(visible !== false)
     return () => setPanelActive(true)
   }, [visible])
-  return <CompassPanel api={api} sessions={sessions} cwd={scope?.cwd} />
+  return <CompassPanel api={api} sessions={sessions} cwd={scope?.cwd} sessionId={scope?.sessionId} />
 }
 
 /**
