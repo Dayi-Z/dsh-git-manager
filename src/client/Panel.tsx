@@ -145,10 +145,13 @@ function OpBanner(): JSX.Element | null {
 // Flow strip
 // ---------------------------------------------------------------------------
 
+/** 流程条：**只有真的在进行中才出现**（没有 phase===1 的步骤就整条收掉），
+ *  并且并进头部而不是自占一条横带。装完的仓库回到"头部 + 页签"两行。 */
 function FlowStrip({ flow }: { flow: FlowSnapshot | null }) {
   const order = ['branch', 'commit', 'push', 'pr', 'review', 'merge']
   const labels: Record<string, string> = { branch: 'flow.branch', commit: 'flow.commit', push: 'flow.push', pr: 'flow.pr', review: 'flow.review', merge: 'flow.merge' }
-  if (!flow) return <div className="gm-flow"><span className="gm-muted">{t('common.loading')}</span></div>
+  if (!flow) return null
+  if (!flow.steps.some((s) => s.phase === 1)) return null
   const stepMap = new Map(flow.steps.map((s) => [s.id, s]))
   return (
     <div className="gm-flow" title={`${flow.repo} · ${flow.current}${flow.ahead ? ` +${flow.ahead}` : ''}${flow.behind ? ` -${flow.behind}` : ''}${flow.prNumber ? ` PR #${flow.prNumber}` : ''}`}>
@@ -616,6 +619,9 @@ function Changes({ api, path, flow }: { api: GitManagerApi; path: string; flow: 
     return (
       <div>
         <div className="gm-filerow" onClick={() => { void showDiff(row.file) }}>
+          {/* 状态字母当左侧导轨：贴在最左边，和文件名之间不留空档。
+              放最右边时它和中段之间是一大片空白，行看着又长又散。 */ }
+          <span className={stClass(letter)}>{letter}</span>
           <FileIcon name={row.newPath.split('/').pop() ?? row.newPath} />
           <span className="gm-file" style={{ cursor: 'pointer', fontWeight: 500 }} title={row.file}>{row.newPath.split('/').pop()}</span>
           {dir !== '' ? <span className="gm-path">{dir}</span> : null}
@@ -631,7 +637,6 @@ function Changes({ api, path, flow }: { api: GitManagerApi; path: string; flow: 
               </>
             )}
           </span>
-          <span className={stClass(letter)}>{letter}</span>
         </div>
         {diffFile === row.file && (
           diffFailed
@@ -1527,7 +1532,9 @@ function AgentView({ api, events }: { api: GitManagerApi; events: GitEvent[] }):
 // Main panel
 // ---------------------------------------------------------------------------
 
-type TabId = 'branches' | 'changes' | 'graph' | 'prs' | 'issues' | 'github' | 'agent'
+type TabId = 'branches' | 'changes' | 'graph' | 'github' | 'agent'
+/** GitHub 这一块内聚度很高，没必要和"分支/变更/图谱"并排占三个页签位。 */
+type GithubTab = 'prs' | 'issues' | 'connect'
 
 /** Changes 页各操作的成功横幅标题（kind → i18n key）。 */
 const OK_TITLES: Record<string, string> = {
@@ -1641,6 +1648,7 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
   /** 上一次自动选中的会话 cwd：用来区分"会话变了"和"用户自己选了别的"。 */
   const appliedCwd = useRef<string | undefined>(undefined)
   const [tab, setTab] = useState<TabId>('changes')
+  const [ghTab, setGhTab] = useState<GithubTab>('prs')
   const [flow, setFlow] = useState<FlowSnapshot | null>(null)
   const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null)
   const [tick, setTick] = useState(0)
@@ -1757,12 +1765,11 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
     ['branches', 'tab.branches'],
     ['changes', 'tab.changes'],
     ['graph', 'tab.graph'],
-    ['prs', 'tab.prs'],
-    ['issues', 'tab.issues'],
     ['github', 'tab.github'],
     ['agent', 'tab.agent'],
   ]
-  const TAB_ICONS: Record<TabId, IconName> = { branches: 'git-branch', changes: 'diff', graph: 'commit', prs: 'git-pr', issues: 'issue', github: 'globe', agent: 'bot' }
+  const TAB_ICONS: Record<TabId, IconName> = { branches: 'git-branch', changes: 'diff', graph: 'commit', github: 'git-pr', agent: 'bot' }
+  const GITHUB_TABS: Array<[GithubTab, string]> = [['prs', 'tab.prs'], ['issues', 'tab.issues'], ['connect', 'tab.connect']]
 
   return (
     <div className={`gm-panel${collapsed ? ' gm-collapsed' : ''}`}>
@@ -1841,8 +1848,8 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
               <div className="gm-muted" style={{ fontSize: 9, opacity: 0.6 }}>dsh-git-manager v{GM_VERSION}</div>
             </div>
           ) : null}
+        <FlowStrip flow={flow} />
       </div>
-      <FlowStrip flow={flow} />
       <div className="gm-tabs" role="tablist">
         {tabs.map(([id, key]) => (
           <button
@@ -1868,9 +1875,25 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
             {tab === 'branches' && <Branches api={api} path={path} />}
             {tab === 'changes' && <Changes api={api} path={path} flow={flow} />}
             {tab === 'graph' && <Graph api={api} path={path} />}
-            {tab === 'prs' && <PRs api={api} repoInfo={repoInfo} auth={authState} />}
-            {tab === 'issues' && <Issues api={api} repoInfo={repoInfo} auth={authState} />}
-            {tab === 'github' && <GitHubView api={api} path={path} repoInfo={repoInfo} auth={authState} reloadAuth={reloadAuth} onGotoPrs={() => setTab('prs')} device={device} deviceBusy={deviceBusy} onStartDevice={startDevice} onCheckDevice={checkDevice} onCancelDevice={() => setDevice(null)} onCloned={(newPath) => { void api.workspaces().then((ws) => { setWorkspaces(ws); setPath(newPath); setTick((x) => x + 1) }).catch(() => {}) }} />}
+            {tab === 'github' && (
+              <>
+                <div className="gm-subtabs" role="tablist">
+                  {GITHUB_TABS.map(([id, key]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      aria-selected={ghTab === id}
+                      className={`gm-subtab${ghTab === id ? ' on' : ''}`}
+                      onClick={() => setGhTab(id)}
+                    >{t(key)}</button>
+                  ))}
+                </div>
+                {ghTab === 'prs' && <PRs api={api} repoInfo={repoInfo} auth={authState} />}
+                {ghTab === 'issues' && <Issues api={api} repoInfo={repoInfo} auth={authState} />}
+                {ghTab === 'connect' && <GitHubView api={api} path={path} repoInfo={repoInfo} auth={authState} reloadAuth={reloadAuth} onGotoPrs={() => setGhTab('prs')} device={device} deviceBusy={deviceBusy} onStartDevice={startDevice} onCheckDevice={checkDevice} onCancelDevice={() => setDevice(null)} onCloned={(newPath) => { void api.workspaces().then((ws) => { setWorkspaces(ws); setPath(newPath); setTick((x) => x + 1) }).catch(() => {}) }} />}
+              </>
+            )}
             {tab === 'agent' && <AgentView api={api} events={agentEvents} />}
           </>
         )}

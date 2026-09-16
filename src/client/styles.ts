@@ -128,7 +128,7 @@ export const css = `
    已完成=绿、进行中=蓝、待办=灰；点只在已达成/进行中时实心。 */
 /* 顶部原本有三条发丝线（head / flow / tabs）。流程条只是注释性质的一行，
    去掉它下面那条，顶部就只剩"头部 | 页签"两条分隔，线少一半。 */
-.gm-flow{display:flex;align-items:center;gap:2px;padding:4px 12px 6px;overflow-x:auto;scrollbar-width:none}
+.gm-flow{display:flex;align-items:center;gap:2px;overflow-x:auto;scrollbar-width:none}
 .gm-flow::-webkit-scrollbar{display:none}
 .gm-step{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;padding:2px 4px;border-radius:6px;color:var(--gm-fg-3);font:var(--dsw-font-xxxs-11)}
 .gm-step.done{color:var(--gm-green)}
@@ -153,6 +153,12 @@ export const css = `
 
 /* ── Body + the row atom ───────────────────────────────────────────────── */
 
+/* 分组页签内的分段控件（GitHub 组：PR / 议题 / 连接）。 */
+.gm-subtabs{display:inline-flex;gap:2px;padding:2px;margin:0 0 8px;border:1px solid var(--gm-border);border-radius:8px}
+.gm-subtab{border:0;border-radius:6px;padding:2px 12px;background:transparent;color:var(--gm-fg-2);font:var(--dsw-font-xxxs-strong-11);cursor:pointer}
+.gm-subtab:hover{color:var(--gm-fg)}
+.gm-subtab.on{background:var(--gm-selected);color:var(--gm-fg)}
+
 .gm-body{flex:1;overflow:auto;padding:6px 6px 14px}
 .gm-row{display:flex;gap:6px;align-items:center;min-height:26px;padding:3px 8px;border-radius:6px}
 .gm-row:hover{background:var(--gm-hover)}
@@ -170,15 +176,19 @@ export const css = `
 
 /* File rows: type icon + weighted name + dimmed directory + status letter;
    the inline actions fade in on hover so the row stays quiet at rest. */
-.gm-filerow{display:flex;gap:6px;align-items:center;min-height:28px;padding:3px 8px;border-radius:6px;cursor:pointer;transition:background var(--gm-t) var(--gm-ease)}
+.gm-filerow{display:flex;gap:5px;align-items:center;min-height:24px;padding:2px 6px;border-radius:6px;cursor:pointer;transition:background var(--gm-t) var(--gm-ease)}
 .gm-filerow:hover{background:var(--gm-hover)}
 .gm-filerow .gm-file{font:var(--dsw-font-xxs-strong-12)}
 .gm-filerow .gm-path{max-width:none}
 .gm-filerow .actions,.gm-row .actions{margin-left:auto;display:inline-flex;gap:2px;flex:none}
+/* 悬停才出现的行内操作钮**不能决定行高**：默认 26px 的圆钮会把 24px 的行撑到
+   30px（量出来的）。行内统一 20px，行高才真的由内容决定。 */
+.gm-filerow .actions .gm-btn.sm{width:20px;height:20px;min-width:20px}
 
 /* ── Status letters ────────────────────────────────────────────────────── */
 
-.gm-st{flex:none;min-width:18px;padding:1px 5px;border-radius:4px;background:var(--gm-hover);color:var(--gm-fg-2);font:var(--dsw-font-xxxs-strong-11);font-family:var(--gm-mono);text-align:center;line-height:14px}
+/* 状态字母当左侧导轨：定宽、居中——整列字母竖着扫一眼就知道哪些是新文件。 */
+.gm-st{flex:none;width:15px;min-width:15px;padding:1px 0;border-radius:4px;background:var(--gm-hover);color:var(--gm-fg-2);font:var(--dsw-font-xxxs-strong-11);font-family:var(--gm-mono);text-align:center;line-height:14px}
 .gm-st.add{color:var(--gm-green)}
 .gm-st.mod{color:var(--gm-amber)}
 .gm-st.del{color:var(--gm-red)}
