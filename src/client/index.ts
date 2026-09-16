@@ -287,9 +287,15 @@ export function apply(ctx: PanelClientContext): void {
     const api = new GitManagerApi()
     const host = ctx as unknown as { sessions: PanelClientContext['sessions'] }
     let teardownDock: (() => void) | null = null
+    // 挂载要等外壳 frame 出现，而 better-sidebar 的服务可能在这之前就到达。
+    // 两者是竞态：晚到的页签形态必须能**取消那个还没跑到的挂载**，否则
+    // teardownDock 还是 null，拆了个寂寞，随后 mount 又把卡片建了出来
+    // ——"页签已经生效、旧的那条右栏还在"就是这个竞态造成的。
+    let standaloneSuppressed = false
+    let cancelStandalone: (() => void) | null = null
 
     const mount = (frame: HTMLElement): void => {
-      if (teardownDock !== null) return
+      if (standaloneSuppressed || teardownDock !== null) return
       // 加入共享右栏 Dock（无则创建），作为一张等高卡片一上一下堆叠。
       const { dock, sync } = dockIn(frame)
       const card = dockCard(dock)
@@ -327,6 +333,12 @@ export function apply(ctx: PanelClientContext): void {
 
     // ── 宿主选择：better-sidebar 在场 ⇒ 做它的一个页签；不在场 ⇒ 自己撑右栏。
     //    better-sidebar 自己拥有右栏，两种形态同时存在就是两个面板抢一个位置。──
+    // 形态写进 body.dataset：出问题时一眼能看出"它现在以哪种身份活着"，
+    // 而不用去猜（console 也留一行，含探测本身的失败原因）。
+    const markHost = (mode: string): void => {
+      try { document.body.dataset.gitmHost = mode } catch { /* noop */ }
+      console.info(`dsh-git-manager: host = ${mode}`)
+    }
     let disposeTab: (() => void) | null = null
     const adoptSidebar = (service: ReturnType<typeof betterSidebarOf>): boolean => {
       if (service === null || disposeTab !== null) return false
@@ -345,17 +357,28 @@ export function apply(ctx: PanelClientContext): void {
     // 页签已经生效，旧的那条右栏还占着位置。
     purgeStaleStandalone()
 
-    if (!adoptSidebar(betterSidebarOf(ctx))) {
-      disposers.push(waitForFrame(mount))
+    const probed = betterSidebarOf(ctx)
+    console.info(`dsh-git-manager: better-sidebar probe → ${probed === null ? 'absent' : 'present'}; ctx.get is ${typeof (ctx as { get?: unknown }).get}`)
+
+    if (!adoptSidebar(probed)) {
+      markHost('dock')
+      cancelStandalone = waitForFrame(mount)
+      disposers.push(() => cancelStandalone?.())
       // better-sidebar 可能比本插件晚挂载：它一出现就换成页签形态并撤掉 Dock。
       try {
         ctx.inject(['betterSidebar'], (scope) => {
           if (!adoptSidebar(betterSidebarOf(scope))) return
+          markHost('tab-late')
+          // 顺序要紧：先封掉挂载路径（含已经在跑的 rAF 轮询），再拆已经挂上的卡片。
+          standaloneSuppressed = true
+          cancelStandalone?.()
+          cancelStandalone = null
           teardownDock?.()
           teardownDock = null
         })
       } catch { /* 无 inject 能力：只用启动时的探测结果 */ }
     } else {
+      markHost('tab')
       // 页签形态下再收一次：外壳可能比本插件晚渲染，轨道修剪要等 frame 出现。
       disposers.push(waitForFrame(() => purgeStaleStandalone()))
     }
