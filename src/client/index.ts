@@ -184,6 +184,44 @@ function setTrack(frame: HTMLElement, child: HTMLElement, widthPx: number): void
   frame.style.gridTemplateColumns = parts.join(' ')
 }
 
+/** 轨道数必须等于"流内子元素数"。移除卡片后如果只删元素不修剪轨道，网格里
+ *  多出来的那条轨道照样占宽度——现象就是"面板搬走了，但那条侧栏还在那里"。
+ *  这里按子元素数截断：多出的轨道（无论值是 0px 还是 360px）一律丢弃。 */
+function normalizeTracks(frame: HTMLElement): void {
+  const inline = frame.style.gridTemplateColumns
+  if (inline === '') return
+  const cur = parseTracks(inline)
+  const kids = Array.prototype.filter.call(frame.children, (c: HTMLElement) => {
+    const p = getComputedStyle(c).position
+    return p !== 'absolute' && p !== 'fixed'
+  }) as HTMLElement[]
+  if (kids.length === cur.length) return
+  frame.style.gridTemplateColumns = kids.map((_, i) => (i < cur.length && cur[i] !== '' ? cur[i] : '0px')).join(' ')
+}
+
+/** 收尸：本插件的旧版本、或上一次 HMR 实例，可能留下一张独立卡片和它占的
+ *  网格轨道。那条轨道是我们建的，只有我们能收——不清掉，页面上就永远多出
+ *  一条空列。
+ *
+ *  只动我们自己的标记（`data-gitm-col`），且**只在共享 Dock 里已无任何卡片时**
+ *  才拆 Dock（Dock 是多个右栏插件共用的，别的插件的卡片绝不能连坐）。 */
+function purgeStaleStandalone(): void {
+  let reclaimed = 0
+  for (const stale of Array.from(document.querySelectorAll<HTMLElement>('[data-gitm-col]'))) {
+    try { stale.remove(); reclaimed += 1 } catch { /* noop */ }
+  }
+  const frame = findFrame()
+  if (frame !== null) {
+    const dock = frame.querySelector<HTMLElement>('[data-dsh-dock]')
+    if (dock !== null && dock.querySelector<HTMLElement>('[data-dsh-card]') === null) {
+      setTrack(frame, dock, 0)
+      dock.remove()
+    }
+    normalizeTracks(frame)
+  }
+  if (reclaimed > 0) console.info(`dsh-git-manager: reclaimed ${reclaimed} stale standalone card(s)`)
+}
+
 /** 在 frame 中取得（或创建）共享右栏 Dock。首个创建者负责挂左缘拖拽手柄。 */
 function dockIn(frame: HTMLElement): { dock: HTMLElement; sync: () => void } {
   const existing = frame.querySelector<HTMLElement>('[data-dsh-dock]')
@@ -279,12 +317,8 @@ export function apply(ctx: PanelClientContext): void {
         if (dock.querySelector<HTMLElement>('[data-dsh-card]') === null) {
           setTrack(frame, dock, 0)
           dock.remove()
-          const cur = parseTracks(frame.style.gridTemplateColumns)
-          const over = cur.length - frame.children.length
-          if (over > 0 && cur.slice(-over).every((t) => t === '0px')) {
-            frame.style.gridTemplateColumns = cur.slice(0, cur.length - over).join(' ')
-          }
         }
+        normalizeTracks(frame)
       }
       // 光有 rAF 取消是不够的：fiber 销毁（HMR 重载/卸载）必须连卡片和
       // React 根一起拆掉，否则页面上会留下孤儿面板。
@@ -306,6 +340,11 @@ export function apply(ctx: PanelClientContext): void {
       }
     }
 
+    // 先收尸、再决定形态：上一版（或上一次 HMR 实例）留下的卡片与网格轨道，
+    // 必须在重新决定"住哪儿"之前清掉——否则就是用户看到的那一幕：
+    // 页签已经生效，旧的那条右栏还占着位置。
+    purgeStaleStandalone()
+
     if (!adoptSidebar(betterSidebarOf(ctx))) {
       disposers.push(waitForFrame(mount))
       // better-sidebar 可能比本插件晚挂载：它一出现就换成页签形态并撤掉 Dock。
@@ -316,6 +355,9 @@ export function apply(ctx: PanelClientContext): void {
           teardownDock = null
         })
       } catch { /* 无 inject 能力：只用启动时的探测结果 */ }
+    } else {
+      // 页签形态下再收一次：外壳可能比本插件晚渲染，轨道修剪要等 frame 出现。
+      disposers.push(waitForFrame(() => purgeStaleStandalone()))
     }
 
     return () => {
