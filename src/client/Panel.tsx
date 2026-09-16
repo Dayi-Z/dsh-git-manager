@@ -539,7 +539,6 @@ function Changes({ api, path, flow }: { api: GitManagerApi; path: string; flow: 
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const { data: outgoing } = usePoll(() => api.outgoing(path), [path], 10000)
   // P0/P1：变基拉取开关（持久化）+ 贮藏库展开
-  const [pullRebase, setPullRebaseState] = useState(getPullRebase)
   const [stashOpen, setStashOpen] = useState(false)
   const { data: stashData, reload: reloadStash } = usePoll(() => api.stashList(path), [path, stashOpen], stashOpen ? 8000 : 60000)
   const stashRows = useMemo(() => {
@@ -661,25 +660,19 @@ function Changes({ api, path, flow }: { api: GitManagerApi; path: string; flow: 
         <button className="gm-btn sm" onClick={() => setTreeView(!treeView)} title={treeView ? t('changes.flat') : t('changes.tree')}>
           <Icon name={treeView ? 'list' : 'folder-tree'} size={13} />
         </button>
-        <button className="gm-btn" onClick={() => act('stage', () => api.stageAll(path))} disabled={busy !== null}>{t('changes.stageAll')}</button>
+        <button className="gm-btn" onClick={() => act('stage', () => api.stageAll(path))} disabled={busy !== null}><Icon name="plus" size={11} />{t('changes.stageAll')}</button>
         <span className="sep" />
-        <button className="gm-btn" onClick={() => act('fetch', () => api.fetch(path))} disabled={busy !== null}>{t('changes.fetch')}</button>
-        <button
-          className={`gm-btn${pullRebase ? ' primary' : ''}`}
-          title={t('pull.rebase')}
-          onClick={() => { const next = !pullRebase; setPullRebaseState(next); setPullRebaseFlag(next) }}
-        >{pullRebase ? t('pull.rebase') : t('changes.pull')}</button>
-        <button className="gm-btn sm" onClick={() => act('pull', () => api.pull(path, pullRebase))} disabled={busy !== null} title={pullRebase ? t('pull.rebase') : t('changes.pull')}>
-          <Icon name="arrow-down" size={13} />
+        <button className="gm-btn sm" onClick={() => act('fetch', () => api.fetch(path))} disabled={busy !== null} title={t('changes.fetch')}><Icon name="sync" size={14} /></button>
+        <button className="gm-btn sm" onClick={() => act('pull', () => api.pull(path, getPullRebase()))} disabled={busy !== null} title={getPullRebase() ? t('pull.rebase') : t('changes.pull')}>
+          <Icon name="arrow-down" size={14} />
         </button>
-        <button className="gm-btn" onClick={() => act('push', () => api.push(path))} disabled={busy !== null}>{t('changes.push')}{(flow?.ahead ?? 0) > 0 ? ` ↑${flow?.ahead}` : ''}</button>
+        <button className="gm-btn" onClick={() => act('push', () => api.push(path))} disabled={busy !== null}><Icon name="arrow-up" size={11} />{t('changes.push')}{(flow?.ahead ?? 0) > 0 ? ` ${flow?.ahead}` : ''}</button>
         <span className="sep" />
-        <button className="gm-btn" disabled={busy !== null} onClick={() => act('stash', () => api.stashPush(path))}>{t('stash.push')}</button>
+        <button className="gm-btn sm" disabled={busy !== null} onClick={() => act('stash', () => api.stashPush(path))} title={t('stash.push')}><Icon name="archive" size={14} /></button>
         <button className="gm-btn sm" disabled={busy !== null || stashRows.length === 0} title={t('stash.pop')} onClick={() => void act('stash', () => api.stashPop(path)).then(reloadStash)}><Icon name="undo" size={13} /></button>
         <button className={`gm-btn sm${stashOpen ? ' primary' : ''}`} onClick={() => setStashOpen(!stashOpen)} title={t('stash.list')}>
           <Icon name="archive" size={13} />{stashRows.length > 0 ? <span style={{ fontSize: 10 }}>{stashRows.length}</span> : null}
         </button>
-        <span className="gm-muted" style={{ marginLeft: 'auto', fontSize: 10, flex: 'none' }}>{data?.ok === true && lines.length === 0 ? t('changes.clean') : `${lines.length} files`}</span>
       </div>
       {stashOpen && stashRows.length > 0 ? (
         <div className="gm-stashlist">
@@ -706,6 +699,7 @@ function Changes({ api, path, flow }: { api: GitManagerApi; path: string; flow: 
           </div>
         )
       })}
+      {lines.length === 0 && outCommits.length === 0 ? <Empty icon="check" title={t('changes.clean')} /> : null}
       {outCommits.length > 0 ? (
         <div className="gm-outsec">
           <div className="gm-outsec-head">
@@ -1791,9 +1785,9 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
             {workspaces.length === 0 ? <option value="">{t('repo.none')}</option> : null}
             {workspaces.map((w) => <option key={w.path} value={w.path}>{w.title || w.path.split(/[\\/]/).pop()}</option>)}
           </select>
-          <button className="gm-btn" onClick={() => { setAddOpen(!addOpen); setAddValue('') }} title={t('repo.add')}><Icon name="plus" size={12} />{t('repo.add')}</button>
-          <button className="gm-btn sm" onClick={removeCurrentRepo} title={t('repo.removeCurrent')}><Icon name="trash" size={13} /></button>
-          <button className="gm-btn" onClick={() => setTick((x) => x + 1)} title={t('common.refresh')}><Icon name="sync" size={12} />{t('common.refresh')}</button>
+          <button className="gm-btn sm" onClick={() => { setAddOpen(!addOpen); setAddValue('') }} title={t('repo.add')}><Icon name="plus" size={14} /></button>
+          <button className="gm-btn sm" onClick={removeCurrentRepo} title={t('repo.removeCurrent')}><Icon name="trash" size={14} /></button>
+          <button className="gm-btn sm" onClick={() => setTick((x) => x + 1)} title={t('common.refresh')}><Icon name="sync" size={14} /></button>
           <button className="gm-btn sm" onClick={() => setSettingsOpen(!settingsOpen)} title={t('settings.title')}><Icon name="gear" size={13} /></button>
           </div>
         </div>
@@ -1830,6 +1824,18 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
                     className={`gm-btn${pollSpeed === spd ? ' primary' : ''}`}
                     onClick={() => { setPollSpeed(spd); forceRender((x) => x + 1) }}
                   >{spd === 'fast' ? t('settings.pollFast') : spd === 'std' ? t('settings.pollStd') : t('settings.pollSlow')}</button>
+                ))}
+              </div>
+              {/* 拉取方式原本是动作行里的一个文字切换钮，夹在"抓取"和"拉取"之间——
+                  它其实是偏好，不是动作。挪进来，动作行就只剩动作。 */}
+              <div className="gm-settings-row">
+                <span className="gm-muted">{t('settings.pull')}</span>
+                {([false, true] as const).map((rebase) => (
+                  <button
+                    key={String(rebase)}
+                    className={`gm-btn${getPullRebase() === rebase ? ' primary' : ''}`}
+                    onClick={() => { setPullRebaseFlag(rebase); forceRender((x) => x + 1) }}
+                  >{rebase ? t('pull.rebase') : t('changes.pull')}</button>
                 ))}
               </div>
               <div className="gm-muted" style={{ fontSize: 9, opacity: 0.6 }}>dsh-git-manager v{GM_VERSION}</div>

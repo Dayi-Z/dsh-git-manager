@@ -92,7 +92,7 @@ export const css = `
 
 /* ── Header: repo picker + the panel's own chrome ──────────────────────── */
 
-.gm-head{position:relative;display:flex;flex-direction:column;gap:6px;padding:8px 8px 8px 12px;border-bottom:1px solid var(--gm-hairline)}
+.gm-head{position:relative;display:flex;flex-direction:column;gap:5px;padding:6px 8px 6px 12px;border-bottom:1px solid var(--gm-hairline)}
 /* 头部第一行：收起把手（可选）+ 仓库选择器。把手只在独立 Dock 形态出现。 */
 .gm-headrow{display:flex;align-items:center;gap:4px;min-width:0}
 .gm-repo{flex:1;display:flex;gap:4px;align-items:center;min-width:0}
@@ -124,22 +124,27 @@ export const css = `
 
 /* ── Guided flow strip ─────────────────────────────────────────────────── */
 
-.gm-flow{display:flex;align-items:center;gap:3px;padding:6px 12px;border-bottom:1px solid var(--gm-hairline);overflow-x:auto;scrollbar-width:none}
+/* 流程条只靠**颜色**表达状态，不用底片：六个带色药丸是整块面板里最吵的一条。
+   已完成=绿、进行中=蓝、待办=灰；点只在已达成/进行中时实心。 */
+/* 顶部原本有三条发丝线（head / flow / tabs）。流程条只是注释性质的一行，
+   去掉它下面那条，顶部就只剩"头部 | 页签"两条分隔，线少一半。 */
+.gm-flow{display:flex;align-items:center;gap:2px;padding:4px 12px 6px;overflow-x:auto;scrollbar-width:none}
 .gm-flow::-webkit-scrollbar{display:none}
-.gm-step{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;padding:2px 8px;border-radius:999px;color:var(--gm-fg-3);font:var(--dsw-font-xxxs-strong-11);transition:background var(--gm-t) var(--gm-ease),color var(--gm-t) var(--gm-ease)}
-.gm-step.done{color:var(--gm-green);background:var(--gm-green-soft)}
-.gm-step.active{color:var(--gm-accent);background:var(--gm-accent-soft);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--gm-accent) 45%,transparent)}
-.gm-step .dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.gm-step{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;padding:2px 4px;border-radius:6px;color:var(--gm-fg-3);font:var(--dsw-font-xxxs-11)}
+.gm-step.done{color:var(--gm-green)}
+.gm-step.active{color:var(--gm-accent)}
+.gm-step .dot{flex:none;width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.45}
+.gm-step.done .dot,.gm-step.active .dot{opacity:1}
 .gm-step.active .dot{animation:gm-pulse 1.4s var(--gm-ease) infinite}
 @keyframes gm-pulse{50%{opacity:.3}}
-.gm-arrow{flex:none;color:var(--gm-fg-3);opacity:.55}
+.gm-arrow{flex:none;color:var(--gm-fg-3);opacity:.35}
 
 /* ── View tabs ─────────────────────────────────────────────────────────── */
 
 .gm-tabs,.gm-tab,.gm-tab .gm-ic{user-select:none;-webkit-user-select:none}
-.gm-tabs{display:flex;gap:2px;padding:4px 6px;border-bottom:1px solid var(--gm-hairline);overflow-x:auto;scrollbar-width:none}
+.gm-tabs{display:flex;gap:2px;padding:3px 6px;border-bottom:1px solid var(--gm-hairline);overflow-x:auto;scrollbar-width:none}
 .gm-tabs::-webkit-scrollbar{display:none}
-.gm-tab{flex:1 1 auto;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;height:26px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:var(--gm-fg-3);text-align:center;font:var(--dsw-font-xxxs-strong-11);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;transition:background var(--gm-t) var(--gm-ease),color var(--gm-t) var(--gm-ease)}
+.gm-tab{flex:1 1 auto;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:24px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:var(--gm-fg-3);text-align:center;font:var(--dsw-font-xxxs-strong-11);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;transition:background var(--gm-t) var(--gm-ease),color var(--gm-t) var(--gm-ease)}
 .gm-tab .gm-ic{flex:none;opacity:.9}
 .gm-tab:hover{background:var(--gm-hover);color:var(--gm-fg)}
 .gm-tab.on{background:var(--gm-selected);color:var(--gm-fg)}
@@ -287,7 +292,7 @@ export const css = `
 .gm-pr,.gm-issue{margin-bottom:6px;padding:8px 10px;border:1px solid var(--gm-hairline);border-radius:8px;cursor:pointer;transition:background var(--gm-t) var(--gm-ease),border-color var(--gm-t) var(--gm-ease)}
 .gm-pr:hover,.gm-issue:hover{background:var(--gm-hover);border-color:var(--gm-border)}
 .gm-pr .t,.gm-issue .t{font:var(--dsw-font-xxs-strong-12)}
-.gm-section{margin-top:14px}
+.gm-section{margin-top:12px}
 .gm-section .head{margin-bottom:6px;color:var(--gm-fg-3);font:var(--dsw-font-xxxs-strong-11);text-transform:uppercase;letter-spacing:.05em}
 .gm-review-btns{display:flex;gap:4px;margin-top:6px}
 
