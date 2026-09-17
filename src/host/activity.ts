@@ -92,7 +92,6 @@ function normalize(raw: string): { abs: string; dir: string } | null {
 interface ExecuteCarrier {
   on(event: string, handler: (exec: ToolExecLike, next: () => unknown) => unknown): unknown
   workspaceRegistry?: { list(): Array<{ path: string }> }
-  config?: { autoRegisterRepos?: boolean }
 }
 
 interface ToolExecLike {
@@ -112,10 +111,13 @@ export function startActivityTracker(
   ctx: Context,
   eventBus: EventBus,
   log: (msg: string) => void = () => {},
+  config?: { autoRegisterRepos?: boolean },
 ): ActivityTracker {
   const carrier = ctx as unknown as ExecuteCarrier
   // 关掉自动收录：cordis.patch.yml 里给这一行加 config.autoRegisterRepos: false。
-  const enabled = carrier.config?.autoRegisterRepos !== false
+  // config 由 Cordis 作为 apply(ctx, config) 的第二个参数传入，不能通过 ctx.config
+  // 读取（ctx 是服务代理，未声明 config inject 时访问会抛错）。
+  const enabled = config?.autoRegisterRepos !== false
 
   let last: ActivitySnapshot | null = null
   const autoAdded = new Set<string>()

@@ -6,7 +6,7 @@
 
 面板的呈现方式与 `dsh-better-sidebar` 同源：每一个颜色、字号角色与动效值都走 DSH 主题令牌；界面是**平面**的（发丝边框 + 悬停底色，流内没有阴影）；纯图标按钮是圆形、透明底、悬停才浮出。明暗主题与任何 `dsh-web-ui` 皮肤都能直接重绘这个面板——面板内部**没有自己的调色板，也没有主题选择器**。详见 [DESIGN.md](DESIGN.md)。
 
-> 2.0.0 起由 **gitcompass** 改名而来：包名、插件行 id（`git-manager`）、HTTP 路由（`/gitm/*`）与 CSS 前缀（`--gm-*`）一并迁移。**模型侧的工具名**（`git_status`、`git_commit`、`github_pr_*` 等）刻意保持不变——它们命名的是操作，不是产品。
+> 2.0.0 起由 **gitcompass** 改名而来：包名、插件行 id（`dsh-git-manager`）、HTTP 路由（`/gitm/*`）与 CSS 前缀（`--gm-*`）一并迁移。**模型侧的工具名**（`git_status`、`git_commit`、`github_pr_*` 等）刻意保持不变——它们命名的是操作，不是产品。
 
 ## 功能特性
 

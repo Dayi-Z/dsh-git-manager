@@ -6,7 +6,7 @@ A GitHub-connected visual git manager for [DeepSeek Harness](https://github.com/
 
 Its panel chrome is built the way `dsh-better-sidebar` builds its own: every color, type role and motion value rides a DSH theme token, the chrome is flat (hairlines and hover fills, no shadows in the flow), and icon-only controls are round and transparent until hovered. Light/dark and any `dsh-web-ui` skin re-skin the panel for free — the panel contains no palette of its own and no theme selector. See [DESIGN.md](DESIGN.md).
 
-> Renamed from **gitcompass** in 2.0.0. The package, the plugin row id (`git-manager`), the HTTP routes (`/gitm/*`) and the CSS surface (`--gm-*`) all moved together. The model-facing tool names (`git_status`, `git_commit`, `github_pr_*`, …) are deliberately unchanged — they name the operation, not the product.
+> Renamed from **gitcompass** in 2.0.0. The package, the plugin row id (`dsh-git-manager`), the HTTP routes (`/gitm/*`) and the CSS surface (`--gm-*`) all moved together. The model-facing tool names (`git_status`, `git_commit`, `github_pr_*`, …) are deliberately unchanged — they name the operation, not the product.
 
 ## Features
 

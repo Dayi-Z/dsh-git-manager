@@ -35,12 +35,53 @@ mkdirSync(plain, { recursive: true });
 writeFileSync(join(innerSrc, 'a.ts'), 'export const a = 1\n');
 writeFileSync(join(plain, 'x.txt'), 'hello\n');
 
-function makeCtx(workspaces = [], config = undefined) {
+// ── 复刻 Cordis 语义的严格 ctx ──────────────────────────────────────────
+// 真实 ctx **不是普通对象**：未 inject 的属性一读就抛
+//     cannot get property "config" without inject
+// （@deepseek-ai/cordis lib/index.js 的 ReflectService.handler.get）。
+// 原来的 mock 是个宽松对象，还在上面挂过 .config —— 那恰好把"用 ctx.config 读
+// 配置"这个 bug **掩盖**掉了：测试全绿，插件一上线就崩。这里让夹具与真实语义
+// 一致：白名单之外一律抛错，于是用错契约在本地就会红。
+const CORDIS_MIXINS = new Set([
+  // ReflectService 装在 ctx 上的 mixin（reflect / fiber / registry / events）
+  'get', 'set', 'provide', 'accessor', 'mixin', 'runtime', 'effect',
+  'inject', 'plugin', 'on', 'once', 'parallel', 'emit', 'serial', 'bail', 'waterfall',
+]);
+// 本插件 inject 的服务 —— 与 src/index.ts 的 `export const inject` 保持一致。
+const INJECTED = new Set(['webServer', 'subprocess', 'workspaceRegistry', 'tools']);
+
+function strictCtx(services) {
+  return new Proxy(services, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'symbol' || prop === 'then' || prop === 'prototype') {
+        return Reflect.get(target, prop, receiver);
+      }
+      if (prop.startsWith('_') || Reflect.has(target, prop) || CORDIS_MIXINS.has(prop) || INJECTED.has(prop)) {
+        return Reflect.get(target, prop, receiver);
+      }
+      throw new Error(`cannot get property "${prop}" without inject`);
+    },
+  });
+}
+
+function makeCtx(workspaces = []) {
   const handlers = {};
   return {
-    ctx: { on: (name, fn) => { handlers[name] = fn; }, workspaceRegistry: { list: () => workspaces }, ...(config ? { config } : {}) },
+    ctx: strictCtx({ on: (name, fn) => { handlers[name] = fn; }, workspaceRegistry: { list: () => workspaces } }),
     fire: async (exec) => handlers['tools/execute'](exec, async () => 'DISPATCHED'),
   };
+}
+
+// ── S: 夹具自身的语义 —— 它必须在"读未声明属性"这件事上像真 ctx ────────
+{
+  const h = makeCtx();
+  let message = null;
+  try { void h.ctx.config; } catch (e) { message = e.message; }
+  check('S1 读未声明的 ctx.config 会抛错（与 Cordis 一致）', message === 'cannot get property "config" without inject', message);
+  let mixinReadable = true;
+  try { void h.ctx.effect; void h.ctx.get; } catch { mixinReadable = false; }
+  check('S2 cordis 自带的 mixin（effect / get）可读', mixinReadable);
+  check('S3 已 inject 的服务可读', typeof h.ctx.on === 'function' && typeof h.ctx.workspaceRegistry.list === 'function');
 }
 const events = [];
 const bus = { emit: (type, data) => events.push({ type, data }) };
@@ -120,8 +161,10 @@ const bus = { emit: (type, data) => events.push({ type, data }) };
   const g = join(root, 'gated');
   mkdirSync(join(g, '.git'), { recursive: true });
   writeFileSync(join(g, 'c.ts'), 'x\n');
-  const h = makeCtx([], { autoRegisterRepos: false });
-  const tracker = startActivityTracker(h.ctx, bus, () => {});
+  // 配置由 Cordis 作为 apply(ctx, config) 的第二个参数传入（activity.ts 的第 4 个
+  // 参数），不是 ctx.config —— 真实 ctx 是服务代理，未声明 config inject 时读取会抛错。
+  const h = makeCtx([]);
+  const tracker = startActivityTracker(h.ctx, bus, () => {}, { autoRegisterRepos: false });
   await h.fire({ name: 'edit', arguments: { file_path: join(g, 'c.ts') } });
   check('F1 autoRegisterRepos:false → 不收录', !shelfList().some((e) => e.path === g), shelfList().map((e) => e.path));
   check('F2 但仍然记录"正在修改"', tracker.snapshot()?.repo === g, tracker.snapshot());
