@@ -364,7 +364,11 @@ export const css = `
 .gm-approve-card.done .gm-hint{opacity:1}
 
 .gm-feed{display:flex;flex-direction:column-reverse;gap:1px;flex:1;overflow:auto;font-size:11px}
-.gm-evt{display:flex;gap:6px;align-items:baseline;min-height:22px;padding:2px 6px;border-radius:6px}
+/* .gm-evt 上的 flex:none 是**功能性的**，不是排版偏好：.gm-feed 是列向 flex，子项默认
+   flex-shrink:1；而这一行的 min-height:22px 把 flex 的 min-height:auto 顶掉了 —— 内容
+   一超过容器高度，每条事件就被压到 22px，wrap 成多行的错误正文便溢出行盒、压在下一条
+   上（实测：文本 42px / 行 26px，溢出 16px）。钉住不收缩，超出的部分交给 .gm-feed 滚动。 */
+.gm-evt{flex:none;display:flex;gap:6px;align-items:baseline;min-height:22px;padding:2px 6px;border-radius:6px}
 .gm-evt:hover{background:var(--gm-hover)}
 .gm-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--gm-fg-3);transform:translateY(-1px)}
 .gm-evt.run .gm-dot{background:var(--gm-info)}
