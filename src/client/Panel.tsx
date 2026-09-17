@@ -20,6 +20,7 @@ import {
   type PullRequestDetail,
   type IssueSummary,
   type IssueDetail,
+  type ActivityView,
 } from './api.ts'
 import { t, setLocaleOverride, getLocaleOverride } from './i18n.ts'
 import { layoutGraph } from './graph.ts'
@@ -1605,6 +1606,16 @@ export interface CompassPanelProps {
 }
 
 /** 把工作区路径与 cwd 都归一化后比较：Windows 上大小写与反斜杠都不该影响命中。 */
+/** 两份仓库清单是否等价（路径 + 自动标记）。避免 5s 轮询引起无谓重渲染。 */
+function sameRepoList(a: WorkspaceEntry[], b: WorkspaceEntry[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (normPath(a[i].path) !== normPath(b[i].path)) return false
+    if (a[i].auto !== b[i].auto) return false
+  }
+  return true
+}
+
 function normPath(p: string): string {
   return p.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase()
 }
@@ -1746,6 +1757,18 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
   }, [api])
 
   /**
+   * 文件活动：agent 此刻在动哪个文件夹/仓库（宿主观测 tools/execute 的参数得来），
+   * 顺带把**自动收录**后的仓库清单同步进下拉框——宿主文件活动收了一个仓库，
+   * 下一次轮询这里就有了，用户不用手动刷新。
+   */
+  const { data: activityView } = usePoll<ActivityView>(() => api.activity(), [tick], 5000)
+  useEffect(() => {
+    const repos = activityView?.repos
+    if (!repos || repos.length === 0) return
+    setWorkspaces((prev) => (sameRepoList(prev, repos) ? prev : repos))
+  }, [activityView])
+
+  /**
    * 自动检测当前会话的工作区：会话 cwd 一变（换会话 / 换工作区 / 重开），
    * 面板就切到对应的仓库；**没收录过就自动收录一次**——否则打开别的会话时
    * 那个仓库根本不在下拉框里，用户只能自己去"收录仓库"里手敲路径。
@@ -1853,7 +1876,9 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
           <div className="gm-repo">
           <select value={path} title={path} onChange={(e) => { setPath(e.target.value); setTick((x) => x + 1) }}>
             {workspaces.length === 0 ? <option value="">{t('repo.none')}</option> : null}
-            {workspaces.map((w) => <option key={w.path} value={w.path}>{w.title || w.path.split(/[\\/]/).pop()}</option>)}
+            {workspaces.map((w) => (
+              <option key={w.path} value={w.path}>{(w.title || w.path.split(/[\\/]/).pop()) + (w.auto === true ? ' · ' + t('repo.auto') : '')}</option>
+            ))}
           </select>
           <button className="gm-btn sm" onClick={() => { setAddOpen(!addOpen); setAddValue('') }} title={t('repo.add')}><Icon name="plus" size={14} /></button>
           <button className="gm-btn sm" onClick={removeCurrentRepo} title={t('repo.removeCurrent')}><Icon name="trash" size={14} /></button>
@@ -1861,6 +1886,38 @@ function CompassPanelInner({ api, sessions, cwd, sessionId, collapsed = false, o
           <button className="gm-btn sm" onClick={() => setSettingsOpen(!settingsOpen)} title={t('settings.title')}><Icon name="gear" size={13} /></button>
           </div>
         </div>
+        {/* 悬挂提示（常驻，两行）：① 面板认的**会话文件夹** ② agent 此刻在动的
+            文件夹/仓库。这两件事以前都只在 body.dataset 里，界面上看不见——
+            "面板没跟随 / 没自动收录"就是这么被漏掉的。 */}
+        {!collapsed ? (
+          <div className="gm-now" title={t('now.hint')}>
+            <div className="gm-now-line">
+              <span className="gm-now-k">{t('now.session')}</span>
+              <span className="gm-path" title={ownCwd ?? ''}>{ownCwd ?? '—'}</span>
+            </div>
+            {activityView?.activity ? (() => {
+              const a = activityView.activity
+              const target = a.repo ?? a.dir
+              const passive = a.tool === 'read' || a.tool === 'grep' || a.tool === 'glob'
+              const canSwitch = a.repo !== null
+                && normPath(a.repo) !== normPath(path)
+                && workspaces.some((w) => normPath(w.path) === normPath(a.repo as string))
+              return (
+                <div className="gm-now-line">
+                  <span className="gm-now-k">{passive ? t('now.reading') : t('now.editing')}</span>
+                  <span className={'gm-path' + (canSwitch ? ' gm-now-hit' : '')} title={a.tool + ' · ' + a.path}>{target}</span>
+                  {canSwitch ? (
+                    <button
+                      className="gm-btn sm gm-now-btn"
+                      title={t('now.switch')}
+                      onClick={() => { setPath(a.repo as string); setTick((x) => x + 1) }}
+                    >{t('now.switch')}</button>
+                  ) : null}
+                </div>
+              )
+            })() : null}
+          </div>
+        ) : null}
         {addOpen ? (
           <div className="gm-addrow">
             <input

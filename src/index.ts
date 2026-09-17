@@ -23,6 +23,7 @@ import { shelfHas } from './host/repo-store.ts'
 import { registerGitManagerRoutes } from './host/routes.ts'
 import { registerTools } from './tools.ts'
 import { EventBus, startRepoObserver } from './host/event-bus.ts'
+import { startActivityTracker } from './host/activity.ts'
 
 /** 所需服务：webserver 路由、托管子进程、workspace 注册表、工具注册表。 */
 export const inject = ['webServer', 'subprocess', 'workspaceRegistry', 'tools']
@@ -50,7 +51,21 @@ function createWorkspaceGate(ctx: Context): WorkspaceGate {
 export function apply(ctx: Context): void {
   const service = new GitService(subprocessRunner(ctx), createWorkspaceGate(ctx))
 
-  ctx.effect(() => registerGitManagerRoutes(ctx, service, eventBus), 'dsh-git-manager: /gitm routes')
+  // 文件活动追踪：会话 cwd 常常只是**容器**（D:\Harness 里套着十几个独立仓库），
+  // 面板只跟 cwd 就永远不知道你在动哪个仓库。这里从 tools/execute 的参数取文件
+  // 路径、向上找仓库根，没收录过的自动进货架，并记住"正在修改"的文件夹。
+  // 关掉：cordis.patch.yml 里给这一行加 config.autoRegisterRepos: false。
+  const logActivity = (msg: string): void => {
+    try {
+      const logger = (ctx as unknown as { logger?: (name: string) => { info?: (m: string) => void } })
+        .logger?.('dsh-git-manager')
+      logger?.info?.(msg)
+    } catch { /* 没有 logger 服务就算了 */ }
+  }
+  const activity = startActivityTracker(ctx, eventBus, logActivity)
+  ctx.effect(() => () => activity.dispose(), 'dsh-git-manager: activity tracker')
+
+  ctx.effect(() => registerGitManagerRoutes(ctx, service, eventBus, activity), 'dsh-git-manager: /gitm routes')
   ctx.effect(() => registerTools(ctx, service, eventBus), 'dsh-git-manager: model tools')
   ctx.effect(() => startRepoObserver(ctx, eventBus), 'dsh-git-manager: repo observer')
 

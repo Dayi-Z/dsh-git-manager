@@ -16,7 +16,28 @@ async function call<T>(path: string, body?: Record<string, unknown>): Promise<T>
   return envelope.value
 }
 
-export interface WorkspaceEntry { path: string; title: string }
+export interface WorkspaceEntry {
+  path: string
+  title: string
+  /** 由文件活动**自动**收录（而不是用户手动添加）。 */
+  auto?: boolean
+}
+
+/** 文件活动快照：agent 此刻在碰的文件 / 目录 / 仓库（宿主 tools/execute 观测）。 */
+export interface ActivitySnapshot {
+  tool: string
+  path: string
+  dir: string
+  repo: string | null
+  at: number
+}
+
+/** /gitm/activity 的返回：活动快照 + 自动收录记录 + 最新仓库清单。 */
+export interface ActivityView {
+  activity: ActivitySnapshot | null
+  autoAdded: string[]
+  repos: WorkspaceEntry[]
+}
 export interface BranchesView {
   repo: string
   current: string
@@ -82,6 +103,8 @@ export interface IssueDetail {
 
 export class GitManagerApi {
   workspaces(): Promise<WorkspaceEntry[]> { return call('/gitm/workspaces') }
+  /** 文件活动快照 + 最新仓库清单（自动收录后下拉框据此更新，无需手动刷新）。 */
+  activity(): Promise<ActivityView> { return call('/gitm/activity') }
   /** 手动收录本地仓库（monorepo 内嵌套仓库等 DSH 未注册场景）。 */
   addRepo(path: string): Promise<WorkspaceEntry[]> { return call('/gitm/repos-add', { path }) }
   removeRepo(path: string): Promise<WorkspaceEntry[]> { return call('/gitm/repos-remove', { path }) }

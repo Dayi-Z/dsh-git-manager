@@ -42,7 +42,8 @@
     "build": "tsdown && npm run build:client",
     "build:client": "tsdown --config tsdown.client.config.ts && node scripts/normalize-client-banner.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "check": "pnpm run typecheck && pnpm run build",
+    "check": "pnpm run typecheck && pnpm run build && node scripts/test-activity.mjs",
+    "test": "node scripts/test-activity.mjs",
     "prepare": "pnpm run build",
     "dev": "tsdown --watch"
   },

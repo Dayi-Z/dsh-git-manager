@@ -8,7 +8,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { access, realpath } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { GitError, WorkspaceEntry } from '../core/types.ts'
 import type { GitService } from './git-service.ts'
@@ -23,6 +23,8 @@ import {
 } from './github-service.ts'
 import { ancestorOriginUrl } from './git-service.ts'
 import { shelfAdd, shelfList, shelfRemove } from './repo-store.ts'
+import { gitRootOf } from './git-root.ts'
+import type { ActivityTracker } from './activity.ts'
 
 type Envelope<T> = { ok: true; value: T } | { ok: false; error: GitError }
 
@@ -68,19 +70,6 @@ function boolField(payload: unknown, key: string): boolean | null {
 const BAD_REQUEST: GitError = { code: 'bad-request', message: 'malformed request' }
 const GIT_MARK = '.git'
 
-/** 从某个目录向上找包含 .git 的仓库根（最多 12 层）。找不到返回 null。
- *  用 existsSync 而不是 access：这条路径在每个会话切换时都会走一遍，同步判断足够快。 */
-function gitRootOf(start: string): string | null {
-  let current = start
-  for (let i = 0; i < 12; i++) {
-    if (existsSync(join(current, GIT_MARK))) return current
-    const parent = dirname(current)
-    if (parent === current) break
-    current = parent
-  }
-  return null
-}
-
 async function listGitWorkspaces(ctx: Context): Promise<WorkspaceEntry[]> {
   const entries = new Map<string, WorkspaceEntry>()
   for (const workspace of ctx.workspaceRegistry.list()) {
@@ -94,7 +83,11 @@ async function listGitWorkspaces(ctx: Context): Promise<WorkspaceEntry[]> {
     try {
       await access(join(repo.path, GIT_MARK))
       if (!entries.has(repo.path)) {
-        entries.set(repo.path, { path: repo.path, title: repo.title ?? repo.path.split(/[\\/]/).pop() ?? repo.path })
+        entries.set(repo.path, {
+          path: repo.path,
+          title: repo.title ?? repo.path.split(/[\\/]/).pop() ?? repo.path,
+          ...(repo.auto === true ? { auto: true } : {}),
+        })
       }
     } catch { /* moved/deleted — ignore */ }
   }
@@ -132,10 +125,12 @@ interface Services {
   service: GitService
   ctx: Context
   eventBus: EventBus
+  /** 文件活动追踪：自动收录正在被修改的仓库 + 「正在修改」快照。 */
+  activity: ActivityTracker
 }
 
 export function route(services: Services) {
-  const { service, ctx, eventBus } = services
+  const { service, ctx, eventBus, activity } = services
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://dsh')
     const path = url.pathname
@@ -183,6 +178,13 @@ export function route(services: Services) {
     switch (path) {
       // ---------------- workspaces / git ----------------
       case '/gitm/workspaces': return ok(res, await listGitWorkspaces(ctx))
+      // 文件活动：面板的「正在修改」悬挂提示用它，顺带把自动收录后的最新
+      // 仓库清单一起回去——文件活动收了一个仓库，下拉框下一次轮询就有了。
+      case '/gitm/activity': return ok(res, {
+        activity: activity.snapshot(),
+        autoAdded: activity.autoAdded(),
+        repos: await listGitWorkspaces(ctx),
+      })
       case '/gitm/repos-add': {
         const p = field(payload, 'path')
         if (p === null) return fail(res, BAD_REQUEST, 400)
@@ -622,8 +624,13 @@ export function route(services: Services) {
   }
 }
 
-export function registerGitManagerRoutes(ctx: Context, service: GitService, eventBus: EventBus): () => void {
-  return ctx.webServer.register({ kind: 'prefix', path: '/gitm', handler: route({ service, ctx, eventBus }) })
+export function registerGitManagerRoutes(
+  ctx: Context,
+  service: GitService,
+  eventBus: EventBus,
+  activity: ActivityTracker,
+): () => void {
+  return ctx.webServer.register({ kind: 'prefix', path: '/gitm', handler: route({ service, ctx, eventBus, activity }) })
 }
 
 // Re-exported for tests/tools.

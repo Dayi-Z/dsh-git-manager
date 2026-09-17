@@ -34,6 +34,8 @@ export type EventType =
   | 'repo:branch-change'
   | 'repo:status-change'
   | 'repo:remote-update'
+  /** 文件活动把 agent 正在改的仓库自动收进了货架。 */
+  | 'repo:auto-added'
 
 /** Human-readable event summaries for the activity feed. */
 function summarize(event: GitEvent): string {
@@ -57,6 +59,8 @@ function summarize(event: GitEvent): string {
       return `Branch: ${d.from} → ${d.to}`
     case 'repo:status-change':
       return `Working tree changed: ${d.detail ?? ''}`
+    case 'repo:auto-added':
+      return `Auto-registered ${d.workspace ?? d.path} (${d.via ?? 'file activity'})`
     default:
       return `${event.type}`
   }

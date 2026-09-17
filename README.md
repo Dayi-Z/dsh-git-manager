@@ -75,6 +75,24 @@ The detection is a runtime probe (`ctx.get('betterSidebar')`), so better-sidebar
 
 The panel also **follows the session's workspace**: it resolves the cwd of the session it belongs to (the tab's `scope.cwd`, else the active session), and re-selects the repository whenever you switch sessions — **adding it to the list first if it was never seen** (the host walks up to the innermost repository root, so a session sitting in a nested repo gets that repo rather than the workspace containing it). A repository you picked by hand is never overridden.
 
+### What counts as "the folder I am working in"
+
+A session workspace is often only a **container** — `D:\Harness` holds a dozen independent repositories — so following the session cwd alone can never tell you which one you are actually editing. The host therefore also watches `tools/execute`: it reads the path arguments of the file tools (`read`, `write`, `edit`, `grep`, `glob`, …), walks up to the enclosing repository root, and **auto-registers that repository** into the picker. A file that does not exist yet counts too — the observation happens before the tool runs, so a `write` creating a new file is exactly the case that matters.
+
+- Auto entries are marked and shown as `name · auto` in the picker, so a shelf that grows by itself stays visible instead of mysterious.
+- They are capped at **20**; the oldest auto entry is evicted first, and hand-added repositories are never touched.
+- `repo:auto-added` is emitted on the activity stream each time one lands.
+- Turn it off with `config.autoRegisterRepos: false` on the plugin row — the strip below still reports what is being touched.
+
+A two-line strip under the repo picker is always visible and answers both questions at a glance:
+
+```
+Session folder   D:\Harness
+Editing          D:\Harness\dsh-learn-wiki
+```
+
+The first line is the session folder the panel follows; the second is the folder the agent is touching **right now** (`Editing` for writing tools, `Reading` for read-only ones). When the second one is a known repository that is not currently selected, a **Switch** button appears beside it.
+
 ## Development
 
 ```sh
@@ -83,6 +101,10 @@ pnpm run build
 ```
 
 Build output: `lib/` (host) and `client/` (browser bundle).
+
+```sh
+node scripts/test-activity.mjs   # file-activity auto-registration (isolated temp home)
+```
 
 ## License
 

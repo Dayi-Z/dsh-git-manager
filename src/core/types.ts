@@ -19,6 +19,8 @@ export interface OpResult {
 export interface WorkspaceEntry {
   path: string
   title: string
+  /** 由文件活动**自动**收录（而不是用户手动添加）——面板会把它标出来。 */
+  auto?: boolean
 }
 
 /** One branch row. */

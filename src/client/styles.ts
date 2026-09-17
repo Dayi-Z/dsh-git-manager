@@ -105,6 +105,14 @@ export const css = `
 .gm-repo select:focus{outline:none;border-color:var(--gm-ring)}
 .gm-addrow{display:flex;gap:4px;align-items:center}
 .gm-addrow input{flex:1;min-width:0}
+/* 悬挂提示：会话文件夹 + agent 此刻在动的文件夹。常态可见，不占垂直空间
+   （两行 12px 文本），是"面板到底认哪个目录"唯一的常驻出口。 */
+.gm-now{display:flex;flex-direction:column;gap:1px;padding:3px 0 1px;min-width:0}
+.gm-now-line{display:flex;align-items:center;gap:5px;min-width:0}
+.gm-now-k{flex:none;color:var(--gm-fg-3);font:var(--dsw-font-xxxs-11)}
+.gm-now-line .gm-path{flex:1;min-width:0}
+.gm-now-btn{flex:none;height:18px;padding:0 6px;font-size:10px}
+.gm-now-hit{color:var(--gm-fg-1)}
 
 /* ── Buttons ───────────────────────────────────────────────────────────── */
 
